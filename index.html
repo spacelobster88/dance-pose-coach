@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>dance-pose-coach — video vs video</title>
+  </head>
+  <body>
+    <header>
+      <h1>💃 dance-pose-coach</h1>
+      <p>
+        Upload a reference video and your test video, play them side by side,
+        and get a live MoveNet pose-similarity score.
+      </p>
+    </header>
+
+    <section class="controls">
+      <label class="control">
+        Reference video
+        <input id="ref-file" type="file" accept="video/*" />
+      </label>
+      <label class="control">
+        Test video
+        <input id="test-file" type="file" accept="video/*" />
+      </label>
+      <label class="control">
+        Model
+        <select id="model-select">
+          <option value="lightning">MoveNet Lightning (fast)</option>
+          <option value="thunder">MoveNet Thunder (accurate)</option>
+        </select>
+      </label>
+      <button id="play-btn" disabled>▶ Play</button>
+      <button id="restart-btn" class="secondary" disabled>⟲ Reset</button>
+    </section>
+
+    <section class="stage">
+      <div class="pane">
+        <h2>Reference</h2>
+        <div class="video-wrap">
+          <video id="ref-video" playsinline muted preload="auto"></video>
+          <canvas id="ref-canvas"></canvas>
+        </div>
+      </div>
+      <div class="pane">
+        <h2>Your attempt</h2>
+        <div class="video-wrap">
+          <video id="test-video" playsinline muted preload="auto"></video>
+          <canvas id="test-canvas"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section class="scoreboard">
+      <div class="score-numbers">
+        <div>
+          <div class="label">Similarity (live)</div>
+          <span id="score-now" class="big">—</span>
+        </div>
+        <div>
+          <div class="label">Session average</div>
+          <span id="score-avg" class="sub">—</span>
+        </div>
+      </div>
+      <div class="score-bar"><div id="score-fill"></div></div>
+    </section>
+
+    <p id="status">Loading…</p>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
