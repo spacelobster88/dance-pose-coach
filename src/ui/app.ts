@@ -100,10 +100,10 @@ export function initApp(): void {
     if (frameBusy || !modelReady) return;
     frameBusy = true;
     try {
-      const [refPose, testPose] = await Promise.all([
-        detector.estimate(dom.refVideo),
-        detector.estimate(dom.testVideo),
-      ]);
+      // Run sequentially: a single MoveNet detector instance cannot safely
+      // execute two inferences concurrently (shared backend/tensor state).
+      const refPose = await detector.estimate(dom.refVideo);
+      const testPose = await detector.estimate(dom.testVideo);
 
       syncCanvasToVideo(dom.refCanvas, dom.refVideo);
       syncCanvasToVideo(dom.testCanvas, dom.testVideo);

@@ -20,6 +20,19 @@
 - [x] `src/main.ts` + `index.html` + styles — runnable demo page
 - [x] `npm run build` / `typecheck` passes
 
+## v0.1.1 — Demo + UI polish (this loop)
+- [x] Fix concurrency bug: run the two MoveNet inferences sequentially
+      (one detector instance can't run two estimates at once)
+- [x] Redesign UI to a light, premium-minimal theme (qrod.ai-inspired):
+      off-white canvas, charcoal type, Inter/geometric sans, restrained borders
+- [x] Add favicon (removes the only page 404)
+- [x] Fully-automated demo pipeline (`npm run demo`):
+      - [x] `demo/prepare-assets.mjs` — download CC BY 3.0 clip, derive ref/test
+      - [x] `demo/record.mjs` — Playwright + headless Chrome, record + trim
+      - [x] ffmpeg → `dance-pose-coach-demo.mp4` + README `.gif`
+- [x] Embed demo GIF + CC-BY attribution in README
+- [x] Verified recording shows live skeletons + score (~99) on both clips
+
 ## Backlog — next loop
 - [ ] Webcam live-follow mode (detection pipeline already shared)
 - [ ] DTW timeline alignment (handle differing tempo between clips)

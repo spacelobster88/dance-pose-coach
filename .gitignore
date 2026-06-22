@@ -20,3 +20,15 @@ sample-videos/
 *.mp4
 *.mov
 *.webm
+
+# Demo intermediates / raw downloads
+demo/out/
+demo/assets/source_*.webm
+demo/assets/probe_*.jpg
+demo/assets/*.jpg
+demo/*.jpg
+
+# …but DO commit the curated demo media (CC BY 3.0, attributed in demo/README.md)
+!demo/assets/reference.mp4
+!demo/assets/test.mp4
+!demo/dance-pose-coach-demo.mp4

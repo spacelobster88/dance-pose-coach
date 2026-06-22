@@ -4,68 +4,93 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dance-pose-coach — video vs video</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%83%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
-    <header>
-      <h1>💃 dance-pose-coach</h1>
-      <p>
-        Upload a reference video and your test video, play them side by side,
-        and get a live MoveNet pose-similarity score.
-      </p>
-    </header>
+    <div class="wrap">
+      <header>
+        <p class="eyebrow">In-browser pose analysis · MoveNet + TF.js</p>
+        <h1>dance&#8209;pose&#8209;coach<span class="dot">.</span></h1>
+        <p>
+          Upload a reference video and your attempt, play them side by side, and
+          read a live pose-similarity score. Everything runs locally in the
+          browser — no upload, no server.
+        </p>
+      </header>
 
-    <section class="controls">
-      <label class="control">
-        Reference video
-        <input id="ref-file" type="file" accept="video/*" />
-      </label>
-      <label class="control">
-        Test video
-        <input id="test-file" type="file" accept="video/*" />
-      </label>
-      <label class="control">
-        Model
-        <select id="model-select">
-          <option value="lightning">MoveNet Lightning (fast)</option>
-          <option value="thunder">MoveNet Thunder (accurate)</option>
-        </select>
-      </label>
-      <button id="play-btn" disabled>▶ Play</button>
-      <button id="restart-btn" class="secondary" disabled>⟲ Reset</button>
-    </section>
+      <section class="controls">
+        <label class="control">
+          Reference video
+          <input id="ref-file" type="file" accept="video/*" />
+        </label>
+        <label class="control">
+          Test video
+          <input id="test-file" type="file" accept="video/*" />
+        </label>
+        <label class="control">
+          Model
+          <select id="model-select">
+            <option value="lightning">MoveNet Lightning · fast</option>
+            <option value="thunder">MoveNet Thunder · accurate</option>
+          </select>
+        </label>
+        <span class="spacer"></span>
+        <button id="play-btn" disabled>Play</button>
+        <button id="restart-btn" class="secondary" disabled>Reset</button>
+      </section>
 
-    <section class="stage">
-      <div class="pane">
-        <h2>Reference</h2>
-        <div class="video-wrap">
-          <video id="ref-video" playsinline muted preload="auto"></video>
-          <canvas id="ref-canvas"></canvas>
+      <section class="stage">
+        <div class="pane ref">
+          <h2>Reference</h2>
+          <div class="video-wrap">
+            <video id="ref-video" playsinline muted preload="auto"></video>
+            <canvas id="ref-canvas"></canvas>
+          </div>
         </div>
-      </div>
-      <div class="pane">
-        <h2>Your attempt</h2>
-        <div class="video-wrap">
-          <video id="test-video" playsinline muted preload="auto"></video>
-          <canvas id="test-canvas"></canvas>
+        <div class="pane test">
+          <h2>Your attempt</h2>
+          <div class="video-wrap">
+            <video id="test-video" playsinline muted preload="auto"></video>
+            <canvas id="test-canvas"></canvas>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="scoreboard">
-      <div class="score-numbers">
-        <div>
-          <div class="label">Similarity (live)</div>
-          <span id="score-now" class="big">—</span>
+      <section class="scoreboard">
+        <div class="score-numbers">
+          <div>
+            <div class="label">Similarity · live</div>
+            <span id="score-now" class="big">—</span
+            ><span class="unit">/100</span>
+          </div>
+          <div>
+            <div class="label">Session average</div>
+            <span id="score-avg" class="sub">—</span>
+          </div>
         </div>
-        <div>
-          <div class="label">Session average</div>
-          <span id="score-avg" class="sub">—</span>
-        </div>
-      </div>
-      <div class="score-bar"><div id="score-fill"></div></div>
-    </section>
+        <div class="score-bar"><div id="score-fill"></div></div>
+        <p id="status">Loading…</p>
+      </section>
 
-    <p id="status">Loading…</p>
+      <footer>
+        <span>dance-pose-coach · v0.1 — video ⟷ video comparison</span>
+        <span
+          >Pose model:
+          <a href="https://www.tensorflow.org/hub/tutorials/movenet"
+            >MoveNet</a
+          ></span
+        >
+      </footer>
+    </div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

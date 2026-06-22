@@ -10,6 +10,14 @@ the browser via TensorFlow.js.
 > mode and DTW-based timeline alignment are planned for the next loop — see
 > [`tasks/todo.md`](tasks/todo.md).
 
+![dance-pose-coach demo](demo/dance-pose-coach-demo.gif)
+
+> Demo footage derived from "Squat - exercise demonstration video" by
+> FitnessScape, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0). The
+> right clip is the same movement zoomed + time-shifted, so the score stays high
+> (normalization handles zoom/position) while still reacting to the timing
+> drift. Regenerate anytime with `npm run demo` — see [`demo/`](demo/).
+
 ## Features (v0.1)
 
 1. **MoveNet detection** — 17 keypoints per frame; switch between
