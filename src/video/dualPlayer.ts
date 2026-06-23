@@ -28,6 +28,7 @@ export class DualPlayer {
   private callbacks: DualPlayerCallbacks;
   private running = false;
   private liveTest = false;
+  private warp: ((refTime: number) => number) | null = null;
 
   constructor(
     ref: HTMLVideoElement,
@@ -60,6 +61,14 @@ export class DualPlayer {
 
   get isLiveTest(): boolean {
     return this.liveTest;
+  }
+
+  /**
+   * Install a DTW warp mapping reference time → test time. When null, the test
+   * clip is aligned by linear playback progress (the v0.1 behavior).
+   */
+  setWarp(warp: ((refTime: number) => number) | null): void {
+    this.warp = warp;
   }
 
   async play(): Promise<void> {
@@ -105,8 +114,14 @@ export class DualPlayer {
     const rDur = this.ref.duration;
     const tDur = this.test.duration;
     if (!isFinite(rDur) || !isFinite(tDur) || rDur <= 0 || tDur <= 0) return;
-    const progress = this.ref.currentTime / rDur;
-    const target = progress * tDur;
+    // With a DTW warp, map ref time → matched test time; otherwise align by
+    // raw playback progress.
+    let target: number;
+    if (this.warp) {
+      target = Math.max(0, Math.min(tDur, this.warp(this.ref.currentTime)));
+    } else {
+      target = (this.ref.currentTime / rDur) * tDur;
+    }
     if (force || Math.abs(this.test.currentTime - target) > DRIFT_THRESHOLD_SEC) {
       this.test.currentTime = target;
     }

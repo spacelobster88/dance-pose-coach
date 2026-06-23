@@ -167,6 +167,14 @@ button.secondary:hover:not(:disabled) {
   border-color: var(--ink-soft);
 }
 
+/* Active toggle (e.g. DTW alignment on). */
+button.secondary.active,
+button.secondary.active:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 button:disabled {
   opacity: 0.4;
   cursor: not-allowed;

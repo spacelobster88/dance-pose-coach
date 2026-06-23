@@ -8,6 +8,8 @@ import {
 } from "../render/skeleton";
 import { DualPlayer, loadVideoFromFile } from "../video/dualPlayer";
 import { startWebcam, type WebcamHandle } from "../video/webcam";
+import { sampleVideoPoses, buildWarp } from "../video/sampler";
+import { dtwAlign } from "../pose/dtw";
 
 interface Dom {
   refVideo: HTMLVideoElement;
@@ -20,6 +22,7 @@ interface Dom {
   testFileControl: HTMLElement;
   testHeading: HTMLElement;
   modelSelect: HTMLSelectElement;
+  dtwBtn: HTMLButtonElement;
   playBtn: HTMLButtonElement;
   restartBtn: HTMLButtonElement;
   scoreNow: HTMLElement;
@@ -46,6 +49,7 @@ export function initApp(): void {
     testFileControl: byId("test-file-control"),
     testHeading: byId("test-heading"),
     modelSelect: byId("model-select"),
+    dtwBtn: byId("dtw-btn"),
     playBtn: byId("play-btn"),
     restartBtn: byId("restart-btn"),
     scoreNow: byId("score-now"),
@@ -64,6 +68,7 @@ export function initApp(): void {
   let modelReady = false;
   let frameBusy = false;
   let webcam: WebcamHandle | null = null;
+  let dtwState: "off" | "analyzing" | "on" = "off";
 
   const setStatus = (msg: string) => {
     dom.status.textContent = msg;
@@ -73,6 +78,26 @@ export function initApp(): void {
     const canPlay = refReady && testReady && modelReady;
     dom.playBtn.disabled = !canPlay;
     dom.restartBtn.disabled = !canPlay;
+    // DTW needs two seekable clips; it's unavailable for the live webcam.
+    dom.dtwBtn.disabled =
+      !canPlay || player.isLiveTest || dtwState === "analyzing";
+  };
+
+  const setDtwBtn = () => {
+    dom.dtwBtn.textContent =
+      dtwState === "analyzing"
+        ? "DTW · analyzing…"
+        : dtwState === "on"
+          ? "DTW · on"
+          : "DTW align";
+    dom.dtwBtn.classList.toggle("active", dtwState === "on");
+  };
+
+  /** Drop any computed warp and revert to linear (progress) alignment. */
+  const resetDtw = () => {
+    dtwState = "off";
+    player.setWarp(null);
+    setDtwBtn();
   };
 
   const setScoreUi = (now: number | null, avg: number | null) => {
@@ -158,6 +183,7 @@ export function initApp(): void {
     const file = dom.refFile.files?.[0];
     if (!file) return;
     refReady = false;
+    resetDtw(); // alignment is invalid once a clip changes
     updateControls();
     setStatus(`Loading reference video “${file.name}”…`);
     try {
@@ -178,6 +204,7 @@ export function initApp(): void {
     const file = dom.testFile.files?.[0];
     if (!file) return;
     testReady = false;
+    resetDtw(); // alignment is invalid once a clip changes
     updateControls();
     setStatus(`Loading test video “${file.name}”…`);
     try {
@@ -206,6 +233,7 @@ export function initApp(): void {
     const mode = dom.testSource.value; // "file" | "webcam"
     player.pause();
     testReady = false;
+    resetDtw(); // a source switch invalidates any alignment
     tracker.reset();
     setScoreUi(null, null);
     clearCanvas(dom.testCanvas);
@@ -263,6 +291,49 @@ export function initApp(): void {
       console.error(err);
       setStatus("Failed to switch model.");
     }
+    updateControls();
+  });
+
+  // ---- DTW alignment ----
+  dom.dtwBtn.addEventListener("click", async () => {
+    if (player.isLiveTest) return;
+
+    // Toggle off: revert to linear progress alignment.
+    if (dtwState === "on") {
+      resetDtw();
+      setStatus("Linear alignment (by playback progress).");
+      return;
+    }
+    if (dtwState === "analyzing") return;
+
+    player.pause();
+    dtwState = "analyzing";
+    setDtwBtn();
+    updateControls();
+    try {
+      const ref = await sampleVideoPoses(dom.refVideo, detector, 6, 240, (d, t) =>
+        setStatus(`DTW: sampling reference poses ${d}/${t}…`),
+      );
+      const test = await sampleVideoPoses(dom.testVideo, detector, 6, 240, (d, t) =>
+        setStatus(`DTW: sampling test poses ${d}/${t}…`),
+      );
+      setStatus("DTW: aligning sequences…");
+      const { refToTest } = dtwAlign(ref.poses, test.poses);
+      player.setWarp(buildWarp(ref.step, test.step, refToTest));
+      dtwState = "on";
+      tracker.reset();
+      setScoreUi(null, null);
+      player.restart();
+      setStatus(
+        "DTW alignment on — test frames matched to the reference by pose. Press Play.",
+      );
+    } catch (err) {
+      console.error(err);
+      dtwState = "off";
+      player.setWarp(null);
+      setStatus("DTW analysis failed; using linear alignment.");
+    }
+    setDtwBtn();
     updateControls();
   });
 
