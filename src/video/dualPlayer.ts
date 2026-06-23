@@ -5,6 +5,10 @@
  * the test clip is seeked to the reference's normalized progress whenever they
  * drift apart by more than a small threshold. This keeps frames loosely in
  * step without DTW. A per-frame callback drives detection + scoring.
+ *
+ * When the test source is a live webcam stream there is no seekable timeline,
+ * so `liveTest` disables all test-seeking: the reference plays as the routine
+ * and each animation frame simply reads the current camera frame.
  */
 
 export interface DualPlayerCallbacks {
@@ -23,6 +27,7 @@ export class DualPlayer {
   private rafId: number | null = null;
   private callbacks: DualPlayerCallbacks;
   private running = false;
+  private liveTest = false;
 
   constructor(
     ref: HTMLVideoElement,
@@ -45,11 +50,23 @@ export class DualPlayer {
     return this.ref.readyState >= 2 && this.test.readyState >= 2;
   }
 
+  /**
+   * Switch the test source between a seekable file (false) and a live webcam
+   * stream (true). In live mode the test clip is never seeked.
+   */
+  setLiveTest(live: boolean): void {
+    this.liveTest = live;
+  }
+
+  get isLiveTest(): boolean {
+    return this.liveTest;
+  }
+
   async play(): Promise<void> {
     if (!this.bothReady) return;
     this.running = true;
     // Drive the test clip from the reference's progress, so align before play.
-    this.syncTestToRef(true);
+    if (!this.liveTest) this.syncTestToRef(true);
     await Promise.all([this.ref.play(), this.test.play()]);
     this.callbacks.onPlay?.();
     this.loop();
@@ -73,7 +90,8 @@ export class DualPlayer {
   /** Seek both clips back to the start (by progress) and render one frame. */
   restart(): void {
     this.ref.currentTime = 0;
-    this.test.currentTime = 0;
+    // A live webcam stream has no seekable timeline — only reset the reference.
+    if (!this.liveTest) this.test.currentTime = 0;
     this.renderOnce();
   }
 
@@ -83,6 +101,7 @@ export class DualPlayer {
    * seek happens regardless of drift (used before play / for scrubbing).
    */
   private syncTestToRef(force = false): void {
+    if (this.liveTest) return;
     const rDur = this.ref.duration;
     const tDur = this.test.duration;
     if (!isFinite(rDur) || !isFinite(tDur) || rDur <= 0 || tDur <= 0) return;

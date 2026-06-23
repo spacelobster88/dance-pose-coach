@@ -7,6 +7,7 @@ import {
   syncCanvasToVideo,
 } from "../render/skeleton";
 import { DualPlayer, loadVideoFromFile } from "../video/dualPlayer";
+import { startWebcam, type WebcamHandle } from "../video/webcam";
 
 interface Dom {
   refVideo: HTMLVideoElement;
@@ -15,6 +16,9 @@ interface Dom {
   testCanvas: HTMLCanvasElement;
   refFile: HTMLInputElement;
   testFile: HTMLInputElement;
+  testSource: HTMLSelectElement;
+  testFileControl: HTMLElement;
+  testHeading: HTMLElement;
   modelSelect: HTMLSelectElement;
   playBtn: HTMLButtonElement;
   restartBtn: HTMLButtonElement;
@@ -38,6 +42,9 @@ export function initApp(): void {
     testCanvas: byId("test-canvas"),
     refFile: byId("ref-file"),
     testFile: byId("test-file"),
+    testSource: byId("test-source"),
+    testFileControl: byId("test-file-control"),
+    testHeading: byId("test-heading"),
     modelSelect: byId("model-select"),
     playBtn: byId("play-btn"),
     restartBtn: byId("restart-btn"),
@@ -56,6 +63,7 @@ export function initApp(): void {
   let testReady = false;
   let modelReady = false;
   let frameBusy = false;
+  let webcam: WebcamHandle | null = null;
 
   const setStatus = (msg: string) => {
     dom.status.textContent = msg;
@@ -182,6 +190,58 @@ export function initApp(): void {
     } catch (err) {
       console.error(err);
       setStatus("Could not load test video.");
+    }
+    updateControls();
+  });
+
+  // ---- Test source switch (video file <-> live webcam) ----
+  const stopWebcam = () => {
+    if (webcam) {
+      webcam.stop();
+      webcam = null;
+    }
+  };
+
+  dom.testSource.addEventListener("change", async () => {
+    const mode = dom.testSource.value; // "file" | "webcam"
+    player.pause();
+    testReady = false;
+    tracker.reset();
+    setScoreUi(null, null);
+    clearCanvas(dom.testCanvas);
+    updateControls();
+
+    if (mode === "webcam") {
+      dom.testFileControl.style.display = "none";
+      dom.testHeading.textContent = "Your attempt · live";
+      setStatus("Starting webcam…");
+      try {
+        webcam = await startWebcam(dom.testVideo);
+        player.setLiveTest(true);
+        testReady = true;
+        setStatus(
+          "Webcam live. Load a reference routine and press Play to follow along.",
+        );
+        player.renderOnce();
+      } catch (err) {
+        console.error(err);
+        setStatus(
+          "Could not start webcam (permission denied or no camera). Reverted to file input.",
+        );
+        // Roll back to file mode so the app stays usable.
+        dom.testSource.value = "file";
+        dom.testFileControl.style.display = "";
+        dom.testHeading.textContent = "Your attempt";
+        player.setLiveTest(false);
+      }
+    } else {
+      stopWebcam();
+      player.setLiveTest(false);
+      dom.testVideo.srcObject = null;
+      dom.testVideo.removeAttribute("src");
+      dom.testFileControl.style.display = "";
+      dom.testHeading.textContent = "Your attempt";
+      setStatus("Load a test video file.");
     }
     updateControls();
   });

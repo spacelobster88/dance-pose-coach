@@ -33,6 +33,13 @@
           <input id="ref-file" type="file" accept="video/*" />
         </label>
         <label class="control">
+          Test source
+          <select id="test-source">
+            <option value="file">Video file</option>
+            <option value="webcam">Webcam · live</option>
+          </select>
+        </label>
+        <label class="control" id="test-file-control">
           Test video
           <input id="test-file" type="file" accept="video/*" />
         </label>
@@ -57,7 +64,7 @@
           </div>
         </div>
         <div class="pane test">
-          <h2>Your attempt</h2>
+          <h2 id="test-heading">Your attempt</h2>
           <div class="video-wrap">
             <video id="test-video" playsinline muted preload="auto"></video>
             <canvas id="test-canvas"></canvas>
