@@ -10,6 +10,15 @@ export interface DrawOptions {
   edgeColor?: string;
   pointRadius?: number;
   lineWidth?: number;
+  /** Bone edges (keypoint index pairs) to draw in the highlight color. */
+  highlightEdges?: Array<[number, number]>;
+  /** Color for highlighted bones (e.g. the worst-diverging limb). */
+  highlightColor?: string;
+}
+
+/** Order-independent key for an edge between keypoints a and b. */
+function edgeKey(a: number, b: number): string {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
 
 /**
@@ -54,20 +63,26 @@ export function drawSkeleton(
   const edgeColor = opts.edgeColor ?? "#00ff9c";
   const pointRadius = opts.pointRadius ?? Math.max(3, canvas.width * 0.006);
   const lineWidth = opts.lineWidth ?? Math.max(2, canvas.width * 0.004);
+  const highlightColor = opts.highlightColor ?? "#ff3b30";
+  const highlight = new Set(
+    (opts.highlightEdges ?? []).map(([a, b]) => edgeKey(a, b)),
+  );
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const kp = pose.keypoints;
 
-  // Bones first so joints sit on top.
-  ctx.lineWidth = lineWidth;
-  ctx.strokeStyle = edgeColor;
+  // Bones first so joints sit on top. Highlighted limbs draw thicker and in the
+  // highlight color so the worst-diverging body part stands out.
   ctx.lineCap = "round";
   for (const [a, b] of SKELETON_EDGES) {
     const ka = kp[a];
     const kb = kp[b];
     if (!ka || !kb) continue;
     if ((ka.score ?? 0) < minScore || (kb.score ?? 0) < minScore) continue;
+    const isHi = highlight.has(edgeKey(a, b));
+    ctx.strokeStyle = isHi ? highlightColor : edgeColor;
+    ctx.lineWidth = isHi ? lineWidth * 1.7 : lineWidth;
     ctx.beginPath();
     ctx.moveTo(ka.x, ka.y);
     ctx.lineTo(kb.x, kb.y);

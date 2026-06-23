@@ -33,15 +33,25 @@
 - [x] Embed demo GIF + CC-BY attribution in README
 - [x] Verified recording shows live skeletons + score (~99) on both clips
 
+## v0.2 — Backlog features (this loop, issues #1–#3)
+- [x] **Webcam live-follow mode** (#1) — `src/video/webcam.ts`; DualPlayer
+      `setLiveTest()` skips test-seeking for the live stream; UI test-source
+      toggle with graceful permission fallback
+- [x] **DTW timeline alignment** (#2) — `src/pose/dtw.ts` (banded DTW) +
+      `src/video/sampler.ts` (offline pose sampling + warp builder); DualPlayer
+      `setWarp()`; "DTW align" toggle, invalidated on clip/source change
+- [x] **Per-joint breakdown** (#3) — `src/pose/perJoint.ts` (per-limb divergence
+      + EMA tracker); breakdown panel + worst-limb red highlight on the skeleton
+- [x] Verified: typecheck + build green; headless run shows score 99 / avg 98.8,
+      DTW enabled, all five limb bars populated (right leg flagged worst)
+
 ## Backlog — next loop
-- [ ] Webcam live-follow mode (detection pipeline already shared)
-- [ ] DTW timeline alignment (handle differing tempo between clips)
-- [ ] Per-joint breakdown (which limb diverged most)
 - [ ] Score smoothing / EMA + on-screen score history graph
+- [ ] Real-time / streaming DTW for the webcam follow mode
 - [ ] Export/record a scored comparison clip
 
 ## Review notes
-- Alignment is by playback progress only in v0.1 — clips should be similar
-  length and start on the same beat for meaningful scores.
+- Default alignment is by playback progress; enable **DTW align** (#2) when the
+  two clips differ in tempo so frames are matched by pose instead.
 - MoveNet weights load from the TF Hub CDN at runtime (needs network on first
   run; cached by the browser afterward).

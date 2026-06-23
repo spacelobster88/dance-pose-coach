@@ -2,6 +2,12 @@ import { PoseDetector, type ModelVariant } from "../pose/detector";
 import { normalizePose } from "../pose/normalize";
 import { poseSimilarity, ScoreTracker } from "../pose/similarity";
 import {
+  perJointDivergence,
+  LimbDivergenceTracker,
+  LIMB_GROUPS,
+  type LimbDivergence,
+} from "../pose/perJoint";
+import {
   drawSkeleton,
   clearCanvas,
   syncCanvasToVideo,
@@ -29,6 +35,7 @@ interface Dom {
   scoreAvg: HTMLElement;
   scoreFill: HTMLElement;
   status: HTMLElement;
+  breakdownRows: HTMLElement;
 }
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -56,12 +63,14 @@ export function initApp(): void {
     scoreAvg: byId("score-avg"),
     scoreFill: byId("score-fill"),
     status: byId("status"),
+    breakdownRows: byId("breakdown-rows"),
   };
 
   const detector = new PoseDetector(
     (dom.modelSelect.value as ModelVariant) || "lightning",
   );
   const tracker = new ScoreTracker(0.3);
+  const limbTracker = new LimbDivergenceTracker(0.3);
 
   let refReady = false;
   let testReady = false;
@@ -110,6 +119,64 @@ export function initApp(): void {
     dom.scoreFill.style.background = `hsl(${hue}, 80%, 45%)`;
   };
 
+  // ---- Per-limb breakdown UI ----
+  // A normalized distance >= this (≈ a third of a torso length) is treated as
+  // "fully off" for the bar scale and triggers the on-skeleton highlight.
+  const DIVERGENCE_CAP = 0.6;
+  const HIGHLIGHT_MIN = 0.18;
+  const limbRowEls = new Map<
+    string,
+    { fill: HTMLElement; val: HTMLElement; row: HTMLElement }
+  >();
+
+  const ensureLimbRows = () => {
+    if (limbRowEls.size) return;
+    for (const g of LIMB_GROUPS) {
+      const row = document.createElement("div");
+      row.className = "bd-row";
+      const label = document.createElement("span");
+      label.className = "bd-label";
+      label.textContent = g.label;
+      const bar = document.createElement("div");
+      bar.className = "bd-bar";
+      const fill = document.createElement("div");
+      fill.className = "bd-fill";
+      bar.appendChild(fill);
+      const val = document.createElement("span");
+      val.className = "bd-val";
+      val.textContent = "—";
+      row.append(label, bar, val);
+      dom.breakdownRows.appendChild(row);
+      limbRowEls.set(g.key, { fill, val, row });
+    }
+  };
+
+  const renderBreakdown = (limbs: LimbDivergence[], worstKey?: string) => {
+    ensureLimbRows();
+    for (const l of limbs) {
+      const el = limbRowEls.get(l.key);
+      if (!el) continue;
+      if (l.distance === null) {
+        el.fill.style.width = "0%";
+        el.val.textContent = "—";
+        el.row.classList.remove("worst");
+        continue;
+      }
+      const pct = Math.max(0, Math.min(100, (l.distance / DIVERGENCE_CAP) * 100));
+      el.fill.style.width = `${pct}%`;
+      // Inverse of the score hue: low divergence = green, high = red.
+      const hue = (1 - pct / 100) * 120;
+      el.fill.style.background = `hsl(${hue}, 80%, 45%)`;
+      el.val.textContent = pct.toFixed(0);
+      el.row.classList.toggle("worst", l.key === worstKey);
+    }
+  };
+
+  const resetBreakdown = () => {
+    limbTracker.reset();
+    renderBreakdown(limbTracker.smoothed());
+  };
+
   const player = new DualPlayer(dom.refVideo, dom.testVideo, {
     onFrame: () => void processFrame(),
     onPlay: () => {
@@ -141,11 +208,9 @@ export function initApp(): void {
       syncCanvasToVideo(dom.refCanvas, dom.refVideo);
       syncCanvasToVideo(dom.testCanvas, dom.testVideo);
 
-      if (refPose) drawSkeleton(dom.refCanvas, refPose);
-      else clearCanvas(dom.refCanvas);
-      if (testPose) drawSkeleton(dom.testCanvas, testPose);
-      else clearCanvas(dom.testCanvas);
-
+      // Score + per-limb breakdown first, so we know which limb (if any) to
+      // highlight before drawing the test skeleton.
+      let worstEdges: Array<[number, number]> | undefined;
       if (refPose && testPose) {
         const refNorm = normalizePose(refPose);
         const testNorm = normalizePose(testPose);
@@ -155,7 +220,21 @@ export function initApp(): void {
             tracker.push(result.score);
             setScoreUi(tracker.smoothed, tracker.average);
           }
+          limbTracker.push(perJointDivergence(refNorm, testNorm));
+          const worst = limbTracker.worst();
+          renderBreakdown(limbTracker.smoothed(), worst?.key);
+          if (worst && worst.distance !== null && worst.distance > HIGHLIGHT_MIN) {
+            worstEdges = worst.edges;
+          }
         }
+      }
+
+      if (refPose) drawSkeleton(dom.refCanvas, refPose);
+      else clearCanvas(dom.refCanvas);
+      if (testPose) {
+        drawSkeleton(dom.testCanvas, testPose, { highlightEdges: worstEdges });
+      } else {
+        clearCanvas(dom.testCanvas);
       }
     } catch (err) {
       console.error("Frame processing error", err);
@@ -190,6 +269,7 @@ export function initApp(): void {
       await loadVideoFromFile(dom.refVideo, file);
       refReady = true;
       tracker.reset();
+      resetBreakdown();
       setScoreUi(null, null);
       setStatus("Reference loaded.");
       player.renderOnce();
@@ -211,6 +291,7 @@ export function initApp(): void {
       await loadVideoFromFile(dom.testVideo, file);
       testReady = true;
       tracker.reset();
+      resetBreakdown();
       setScoreUi(null, null);
       setStatus("Test loaded.");
       player.renderOnce();
@@ -235,6 +316,7 @@ export function initApp(): void {
     testReady = false;
     resetDtw(); // a source switch invalidates any alignment
     tracker.reset();
+    resetBreakdown();
     setScoreUi(null, null);
     clearCanvas(dom.testCanvas);
     updateControls();
@@ -322,6 +404,7 @@ export function initApp(): void {
       player.setWarp(buildWarp(ref.step, test.step, refToTest));
       dtwState = "on";
       tracker.reset();
+      resetBreakdown();
       setScoreUi(null, null);
       player.restart();
       setStatus(
@@ -352,6 +435,7 @@ export function initApp(): void {
   dom.restartBtn.addEventListener("click", () => {
     player.pause();
     tracker.reset();
+    resetBreakdown();
     setScoreUi(null, null);
     player.restart();
     setStatus("Reset to start.");
@@ -359,4 +443,5 @@ export function initApp(): void {
 
   updateControls();
   setScoreUi(null, null);
+  renderBreakdown(limbTracker.smoothed());
 }
