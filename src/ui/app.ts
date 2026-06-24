@@ -17,7 +17,9 @@ import { drawComposite, sizeComposite } from "../render/composite";
 import {
   ComparisonRecorder,
   downloadBlob,
+  mp4Supported,
   recordingSupported,
+  type ExportFormat,
 } from "../video/recorder";
 import { DualPlayer, loadVideoFromFile } from "../video/dualPlayer";
 import { startWebcam, type WebcamHandle } from "../video/webcam";
@@ -40,6 +42,7 @@ interface Dom {
   playBtn: HTMLButtonElement;
   restartBtn: HTMLButtonElement;
   recordBtn: HTMLButtonElement;
+  formatSelect: HTMLSelectElement;
   scoreNow: HTMLElement;
   scoreAvg: HTMLElement;
   scoreFill: HTMLElement;
@@ -72,6 +75,7 @@ export function initApp(): void {
     playBtn: byId("play-btn"),
     restartBtn: byId("restart-btn"),
     recordBtn: byId("record-btn"),
+    formatSelect: byId("format-select"),
     scoreNow: byId("score-now"),
     scoreAvg: byId("score-avg"),
     scoreFill: byId("score-fill"),
@@ -240,10 +244,16 @@ export function initApp(): void {
   const finishRecording = async () => {
     if (!recorder.active) return;
     try {
+      const requested = dom.formatSelect.value as ExportFormat;
       const blob = await recorder.stop();
+      const ext = recorder.extension; // actual container (may differ on fallback)
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      downloadBlob(blob, `dance-pose-coach-${stamp}.webm`);
-      setStatus(`Saved comparison clip (${(blob.size / 1e6).toFixed(1)} MB).`);
+      downloadBlob(blob, `dance-pose-coach-${stamp}.${ext}`);
+      const fellBack = requested === "mp4" && ext !== "mp4";
+      setStatus(
+        `Saved comparison clip (${ext.toUpperCase()}, ${(blob.size / 1e6).toFixed(1)} MB).` +
+          (fellBack ? " This browser can't record MP4, so it saved as WebM." : ""),
+      );
     } catch (err) {
       console.error(err);
       setStatus("Recording failed to save.");
@@ -560,6 +570,10 @@ export function initApp(): void {
   });
 
   // ---- Export / record button ----
+  // Default to WebM where MP4 recording isn't available (e.g. Firefox), so the
+  // selected format matches what the browser will actually produce.
+  if (!mp4Supported()) dom.formatSelect.value = "webm";
+
   dom.recordBtn.addEventListener("click", async () => {
     if (recorder.active) {
       await finishRecording();
@@ -567,7 +581,7 @@ export function initApp(): void {
     }
     try {
       sizeComposite(exportCanvas); // fix dimensions before capturing the stream
-      recorder.start(exportCanvas);
+      recorder.start(exportCanvas, 30, dom.formatSelect.value as ExportFormat);
     } catch (err) {
       console.error(err);
       setStatus(err instanceof Error ? err.message : "Could not start recording.");

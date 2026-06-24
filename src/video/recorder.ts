@@ -4,19 +4,46 @@
 // composite.ts) with MediaRecorder and resolves a downloadable Blob on stop.
 // Everything stays client-side — no upload, no server.
 
-/** Pick the best webm codec the browser actually supports. */
-function pickMimeType(): string {
-  const candidates = [
-    "video/webm;codecs=vp9",
-    "video/webm;codecs=vp8",
-    "video/webm",
-  ];
-  const supported = (window as { MediaRecorder?: typeof MediaRecorder })
-    .MediaRecorder;
-  for (const t of candidates) {
-    if (supported?.isTypeSupported?.(t)) return t;
+/** Container the user can ask to export. */
+export type ExportFormat = "mp4" | "webm";
+
+// MP4 (H.264) — natively recordable in Safari and recent Chromium; not in Firefox.
+const MP4_CANDIDATES = [
+  "video/mp4;codecs=avc1.42E01E", // H.264 baseline, broadest playback
+  "video/mp4;codecs=avc1",
+  "video/mp4",
+];
+// WebM (VP9/VP8) — the universal fallback supported by every MediaRecorder.
+const WEBM_CANDIDATES = [
+  "video/webm;codecs=vp9",
+  "video/webm;codecs=vp8",
+  "video/webm",
+];
+
+function isTypeSupported(t: string): boolean {
+  const MR = (window as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder;
+  return Boolean(MR?.isTypeSupported?.(t));
+}
+
+/** True if this browser can record MP4 directly (no transcode needed). */
+export function mp4Supported(): boolean {
+  return MP4_CANDIDATES.some(isTypeSupported);
+}
+
+/**
+ * Pick the best supported mime type for the requested container. Prefers the
+ * requested family, but falls back to the other so recording never fails just
+ * because (e.g.) Firefox can't write MP4.
+ */
+function pickMimeType(format: ExportFormat): string {
+  const order =
+    format === "mp4"
+      ? [...MP4_CANDIDATES, ...WEBM_CANDIDATES]
+      : [...WEBM_CANDIDATES, ...MP4_CANDIDATES];
+  for (const t of order) {
+    if (isTypeSupported(t)) return t;
   }
-  return "video/webm";
+  return format === "mp4" ? "video/mp4" : "video/webm";
 }
 
 export function recordingSupported(): boolean {
@@ -35,13 +62,18 @@ export class ComparisonRecorder {
     return this.recorder !== null && this.recorder.state !== "inactive";
   }
 
-  /** Begin capturing `canvas` at `fps`. Throws if recording is unsupported. */
-  start(canvas: HTMLCanvasElement, fps = 30): void {
+  /** The container actually used (may differ from the request on fallback). */
+  get extension(): ExportFormat {
+    return this.mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+  }
+
+  /** Begin capturing `canvas` at `fps` in `format`. Throws if unsupported. */
+  start(canvas: HTMLCanvasElement, fps = 30, format: ExportFormat = "webm"): void {
     if (!recordingSupported()) {
       throw new Error("Recording is not supported in this browser.");
     }
     if (this.active) return;
-    this.mimeType = pickMimeType();
+    this.mimeType = pickMimeType(format);
     this.chunks = [];
     const stream = canvas.captureStream(fps);
     this.recorder = new MediaRecorder(stream, {

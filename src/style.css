@@ -162,6 +162,25 @@ button.secondary {
   border: 1px solid var(--line-strong);
 }
 
+/* Export format picker — match the secondary buttons in the controls bar. */
+#format-select {
+  font-family: var(--font);
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+#format-select:hover {
+  background: var(--surface);
+  border-color: var(--ink-soft);
+}
+
 button.secondary:hover:not(:disabled) {
   background: var(--surface);
   border-color: var(--ink-soft);
