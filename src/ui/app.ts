@@ -17,6 +17,7 @@ import { DualPlayer, loadVideoFromFile } from "../video/dualPlayer";
 import { startWebcam, type WebcamHandle } from "../video/webcam";
 import { sampleVideoPoses, buildWarp } from "../video/sampler";
 import { dtwAlign } from "../pose/dtw";
+import { StreamingAligner } from "../pose/streamDtw";
 
 interface Dom {
   refVideo: HTMLVideoElement;
@@ -36,6 +37,8 @@ interface Dom {
   scoreAvg: HTMLElement;
   scoreFill: HTMLElement;
   scoreHistory: HTMLCanvasElement;
+  lagStat: HTMLElement;
+  scoreLag: HTMLElement;
   status: HTMLElement;
   breakdownRows: HTMLElement;
 }
@@ -65,6 +68,8 @@ export function initApp(): void {
     scoreAvg: byId("score-avg"),
     scoreFill: byId("score-fill"),
     scoreHistory: byId("score-history"),
+    lagStat: byId("lag-stat"),
+    scoreLag: byId("score-lag"),
     status: byId("status"),
     breakdownRows: byId("breakdown-rows"),
   };
@@ -75,12 +80,15 @@ export function initApp(): void {
   const tracker = new ScoreTracker(0.3);
   const limbTracker = new LimbDivergenceTracker(0.3);
   const scoreGraph = new ScoreGraph(dom.scoreHistory);
+  const streamAligner = new StreamingAligner();
 
   /** Clear the running score, its history graph, and the numeric display. */
   const resetScore = () => {
     tracker.reset();
     scoreGraph.reset();
+    streamAligner.reset();
     setScoreUi(null, null);
+    setLagUi(null);
   };
 
   let refReady = false;
@@ -89,6 +97,8 @@ export function initApp(): void {
   let frameBusy = false;
   let webcam: WebcamHandle | null = null;
   let dtwState: "off" | "analyzing" | "on" = "off";
+  // Streaming alignment for the live webcam (separate from the offline DTW warp).
+  let liveSync = false;
 
   const setStatus = (msg: string) => {
     dom.status.textContent = msg;
@@ -98,12 +108,20 @@ export function initApp(): void {
     const canPlay = refReady && testReady && modelReady;
     dom.playBtn.disabled = !canPlay;
     dom.restartBtn.disabled = !canPlay;
-    // DTW needs two seekable clips; it's unavailable for the live webcam.
+    // In file mode the button runs offline DTW (needs two seekable clips); in
+    // live mode it toggles streaming alignment, which is always available.
     dom.dtwBtn.disabled =
-      !canPlay || player.isLiveTest || dtwState === "analyzing";
+      !canPlay || (!player.isLiveTest && dtwState === "analyzing");
   };
 
   const setDtwBtn = () => {
+    if (player.isLiveTest) {
+      dom.dtwBtn.textContent = liveSync ? "Live sync · on" : "Live sync";
+      dom.dtwBtn.classList.toggle("active", liveSync);
+      dom.dtwBtn.title =
+        "Compensate for lag: match your live pose to the closest recent reference pose";
+      return;
+    }
     dom.dtwBtn.textContent =
       dtwState === "analyzing"
         ? "DTW · analyzing…"
@@ -111,6 +129,8 @@ export function initApp(): void {
           ? "DTW · on"
           : "DTW align";
     dom.dtwBtn.classList.toggle("active", dtwState === "on");
+    dom.dtwBtn.title =
+      "Align the two clips by pose using Dynamic Time Warping, so different tempos still match";
   };
 
   /** Drop any computed warp and revert to linear (progress) alignment. */
@@ -128,6 +148,13 @@ export function initApp(): void {
     // Hue from red (0) to green (120) for an at-a-glance read.
     const hue = (pct / 100) * 120;
     dom.scoreFill.style.background = `hsl(${hue}, 80%, 45%)`;
+  };
+
+  // Lag readout is only meaningful with live sync engaged on the webcam.
+  const setLagUi = (lagMs: number | null) => {
+    const show = liveSync && player.isLiveTest;
+    dom.lagStat.hidden = !show;
+    dom.scoreLag.textContent = lagMs === null ? "—" : lagMs.toFixed(0);
   };
 
   // ---- Per-limb breakdown UI ----
@@ -226,7 +253,19 @@ export function initApp(): void {
         const refNorm = normalizePose(refPose);
         const testNorm = normalizePose(testPose);
         if (refNorm && testNorm) {
-          const result = poseSimilarity(refNorm, testNorm);
+          // With live sync, match the camera pose against a short window of
+          // recent reference poses (lag compensation) and score against the best
+          // match; otherwise compare the instantaneous reference frame.
+          let refForScore = refNorm;
+          if (liveSync && player.isLiveTest) {
+            streamAligner.pushRef(refNorm, dom.refVideo.currentTime * 1000);
+            const m = streamAligner.match(testNorm);
+            if (m) {
+              refForScore = m.refPose;
+              setLagUi(m.lagMs);
+            }
+          }
+          const result = poseSimilarity(refForScore, testNorm);
           if (result) {
             tracker.push(result.score);
             setScoreUi(tracker.smoothed, tracker.average);
@@ -234,7 +273,7 @@ export function initApp(): void {
               scoreGraph.push(result.score, tracker.smoothed);
             }
           }
-          limbTracker.push(perJointDivergence(refNorm, testNorm));
+          limbTracker.push(perJointDivergence(refForScore, testNorm));
           const worst = limbTracker.worst();
           renderBreakdown(limbTracker.smoothed(), worst?.key);
           if (worst && worst.distance !== null && worst.distance > HIGHLIGHT_MIN) {
@@ -326,6 +365,7 @@ export function initApp(): void {
     const mode = dom.testSource.value; // "file" | "webcam"
     player.pause();
     testReady = false;
+    liveSync = false; // streaming alignment doesn't carry across a source switch
     resetDtw(); // a source switch invalidates any alignment
     resetScore();
     resetBreakdown();
@@ -364,6 +404,8 @@ export function initApp(): void {
       dom.testHeading.textContent = "Your attempt";
       setStatus("Load a test video file.");
     }
+    setDtwBtn(); // relabel: "DTW align" (file) vs "Live sync" (webcam)
+    setLagUi(null);
     updateControls();
   });
 
@@ -389,7 +431,18 @@ export function initApp(): void {
 
   // ---- DTW alignment ----
   dom.dtwBtn.addEventListener("click", async () => {
-    if (player.isLiveTest) return;
+    // Live webcam: toggle streaming (lag-compensated) alignment.
+    if (player.isLiveTest) {
+      liveSync = !liveSync;
+      resetScore(); // score semantics change; start the history fresh
+      setDtwBtn();
+      setStatus(
+        liveSync
+          ? "Live sync on — your lag behind the reference is compensated. Press Play."
+          : "Live sync off — comparing the live frame to the reference instant.",
+      );
+      return;
+    }
 
     // Toggle off: revert to linear progress alignment.
     if (dtwState === "on") {

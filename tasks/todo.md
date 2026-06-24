@@ -50,7 +50,12 @@
       sparkline, raw + EMA traces, 50/75/100 grid, hue-coded); scoreboard canvas
       + `resetScore()` helper clears it on reset / clip / source / DTW change.
       Reusable headless check added: `demo/verify.mjs` (`npm run verify`).
-- [ ] Real-time / streaming DTW for the webcam follow mode (#5)
+- [x] **Streaming DTW for webcam** (#5) — `src/pose/streamDtw.ts`
+      (`StreamingAligner`: windowed best-match over recent reference poses with a
+      monotonic non-decreasing matched time = lag compensation). Alignment button
+      becomes "Live sync" in webcam mode; scores against the matched pose and
+      shows the detected lag (ms behind). Verified with Chrome's fake camera
+      (test clip piped in) — `demo/verify.mjs` scenario B.
 - [ ] Export/record a scored comparison clip (#6)
 
 ## Review notes
