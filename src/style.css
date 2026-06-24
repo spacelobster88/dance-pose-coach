@@ -175,6 +175,14 @@ button.secondary.active:hover:not(:disabled) {
   color: #fff;
 }
 
+/* Recording in progress — override the generic active toggle with a clear red. */
+#record-btn.active,
+#record-btn.active:hover:not(:disabled) {
+  background: #d8392f;
+  border-color: #d8392f;
+  color: #fff;
+}
+
 button:disabled {
   opacity: 0.4;
   cursor: not-allowed;

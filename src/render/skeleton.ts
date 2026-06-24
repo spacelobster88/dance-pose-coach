@@ -22,6 +22,72 @@ function edgeKey(a: number, b: number): string {
 }
 
 /**
+ * Linear map from source-video pixel space into the target canvas:
+ *   canvasX = x * sx + dx,  canvasY = y * sy + dy
+ * Identity (the default) draws 1:1, as the live overlays do.
+ */
+export interface PoseTransform {
+  sx: number;
+  sy: number;
+  dx: number;
+  dy: number;
+}
+
+const IDENTITY: PoseTransform = { sx: 1, sy: 1, dx: 0, dy: 0 };
+
+/**
+ * Draw a pose's bones and joints into an existing 2D context under a coordinate
+ * transform, *without* clearing. Shared by the live overlays (identity) and the
+ * export composite (scaled/offset into a sub-region). Caller controls clearing.
+ */
+export function strokePose(
+  ctx: CanvasRenderingContext2D,
+  pose: Pose,
+  opts: DrawOptions & { transform?: PoseTransform } = {},
+): void {
+  const t = opts.transform ?? IDENTITY;
+  const minScore = opts.minScore ?? DEFAULT_MIN_KEYPOINT_SCORE;
+  const pointColor = opts.pointColor ?? "#00e5ff";
+  const edgeColor = opts.edgeColor ?? "#00ff9c";
+  const pointRadius = opts.pointRadius ?? 4;
+  const lineWidth = opts.lineWidth ?? 2;
+  const highlightColor = opts.highlightColor ?? "#ff3b30";
+  const highlight = new Set(
+    (opts.highlightEdges ?? []).map(([a, b]) => edgeKey(a, b)),
+  );
+  const tx = (x: number) => x * t.sx + t.dx;
+  const ty = (y: number) => y * t.sy + t.dy;
+
+  const kp = pose.keypoints;
+
+  // Bones first so joints sit on top. Highlighted limbs draw thicker and in the
+  // highlight color so the worst-diverging body part stands out.
+  ctx.lineCap = "round";
+  for (const [a, b] of SKELETON_EDGES) {
+    const ka = kp[a];
+    const kb = kp[b];
+    if (!ka || !kb) continue;
+    if ((ka.score ?? 0) < minScore || (kb.score ?? 0) < minScore) continue;
+    const isHi = highlight.has(edgeKey(a, b));
+    ctx.strokeStyle = isHi ? highlightColor : edgeColor;
+    ctx.lineWidth = isHi ? lineWidth * 1.7 : lineWidth;
+    ctx.beginPath();
+    ctx.moveTo(tx(ka.x), ty(ka.y));
+    ctx.lineTo(tx(kb.x), ty(kb.y));
+    ctx.stroke();
+  }
+
+  // Joints.
+  ctx.fillStyle = pointColor;
+  for (const k of kp) {
+    if ((k.score ?? 0) < minScore) continue;
+    ctx.beginPath();
+    ctx.arc(tx(k.x), ty(k.y), pointRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
  * Resize a canvas's drawing buffer to match a video's intrinsic resolution so
  * skeleton coordinates (which are in source-video pixels) line up exactly.
  * Returns true if the canvas was resized.
@@ -57,44 +123,11 @@ export function drawSkeleton(
 ): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-
-  const minScore = opts.minScore ?? DEFAULT_MIN_KEYPOINT_SCORE;
-  const pointColor = opts.pointColor ?? "#00e5ff";
-  const edgeColor = opts.edgeColor ?? "#00ff9c";
-  const pointRadius = opts.pointRadius ?? Math.max(3, canvas.width * 0.006);
-  const lineWidth = opts.lineWidth ?? Math.max(2, canvas.width * 0.004);
-  const highlightColor = opts.highlightColor ?? "#ff3b30";
-  const highlight = new Set(
-    (opts.highlightEdges ?? []).map(([a, b]) => edgeKey(a, b)),
-  );
-
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  const kp = pose.keypoints;
-
-  // Bones first so joints sit on top. Highlighted limbs draw thicker and in the
-  // highlight color so the worst-diverging body part stands out.
-  ctx.lineCap = "round";
-  for (const [a, b] of SKELETON_EDGES) {
-    const ka = kp[a];
-    const kb = kp[b];
-    if (!ka || !kb) continue;
-    if ((ka.score ?? 0) < minScore || (kb.score ?? 0) < minScore) continue;
-    const isHi = highlight.has(edgeKey(a, b));
-    ctx.strokeStyle = isHi ? highlightColor : edgeColor;
-    ctx.lineWidth = isHi ? lineWidth * 1.7 : lineWidth;
-    ctx.beginPath();
-    ctx.moveTo(ka.x, ka.y);
-    ctx.lineTo(kb.x, kb.y);
-    ctx.stroke();
-  }
-
-  // Joints.
-  ctx.fillStyle = pointColor;
-  for (const k of kp) {
-    if ((k.score ?? 0) < minScore) continue;
-    ctx.beginPath();
-    ctx.arc(k.x, k.y, pointRadius, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  // Live overlays draw 1:1 in source-video pixels; size strokes to the canvas.
+  strokePose(ctx, pose, {
+    pointRadius: Math.max(3, canvas.width * 0.006),
+    lineWidth: Math.max(2, canvas.width * 0.004),
+    ...opts,
+  });
 }

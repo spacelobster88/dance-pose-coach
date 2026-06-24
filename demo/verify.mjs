@@ -15,7 +15,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { chromium } from "playwright";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -224,6 +224,65 @@ async function verifyWebcamStreaming() {
   }
 }
 
+// ---- Scenario C: export a scored comparison clip ----
+async function verifyExport() {
+  log("=== Scenario C: export scored clip ===");
+  const browser = await chromium.launch({ channel: "chrome", headless: true, args: CHROME_ARGS });
+  try {
+    const ctx = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      acceptDownloads: true,
+    });
+    const page = await ctx.newPage();
+    page.on("console", (m) => m.type() === "error" && log(`page error: ${m.text()}`));
+    await gotoReady(page);
+    await page.setInputFiles("#ref-file", REF);
+    await page.setInputFiles("#test-file", TEST);
+    await page.waitForFunction(
+      () => !document.getElementById("play-btn")?.hasAttribute("disabled"),
+      null,
+      { timeout: 30000 },
+    );
+
+    const downloadPromise = page.waitForEvent("download", { timeout: 30000 });
+    log("recording…");
+    await page.click("#record-btn"); // starts recording + playback
+    const recText = await page.$eval("#record-btn", (e) => e.textContent.trim());
+    check(/stop/i.test(recText), "C: record button shows Stop while recording", `"${recText}"`);
+
+    await page.waitForTimeout(5000); // capture a few seconds of frames
+    await page.click("#record-btn"); // stop -> triggers download
+
+    const download = await downloadPromise;
+    const name = download.suggestedFilename();
+    const saved = resolve(OUT, name);
+    await download.saveAs(saved);
+    const size = statSync(saved).size;
+    check(/\.webm$/.test(name), "C: download is a .webm", name);
+    check(size > 20000, "C: recorded clip is non-empty", `${(size / 1024).toFixed(0)} KB`);
+
+    // Decode it: a valid clip reports the composite resolution. (MediaRecorder
+    // webm omits a container duration, so we count decoded frames instead.)
+    const dim = spawnSync("ffprobe", [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=width,height",
+      "-of", "default=nw=1:nk=1", saved,
+    ], { encoding: "utf8" });
+    const [w, h] = (dim.stdout || "").trim().split(/\s+/).map(Number);
+    check(w === 1280 && h === 596, "C: clip decodes at composite resolution", `${w}x${h}`);
+
+    const frames = spawnSync("ffprobe", [
+      "-v", "error", "-select_streams", "v:0",
+      "-count_packets", "-show_entries", "stream=nb_read_packets",
+      "-of", "default=nw=1:nk=1", saved,
+    ], { encoding: "utf8" });
+    const nFrames = Number((frames.stdout || "").trim());
+    check(nFrames > 20, "C: clip contains real frames", `${nFrames} frames`);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 async function main() {
   if (!existsSync(REF) || !existsSync(TEST)) {
     sh("node", [resolve(__dirname, "prepare-assets.mjs")], { cwd: ROOT });
@@ -242,6 +301,7 @@ async function main() {
     await waitForServer(BASE);
     await verifyFileMode();
     await verifyWebcamStreaming();
+    await verifyExport();
   } finally {
     server.kill("SIGTERM");
   }

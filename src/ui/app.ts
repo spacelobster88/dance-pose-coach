@@ -13,6 +13,12 @@ import {
   syncCanvasToVideo,
 } from "../render/skeleton";
 import { ScoreGraph } from "../render/scoreGraph";
+import { drawComposite, sizeComposite } from "../render/composite";
+import {
+  ComparisonRecorder,
+  downloadBlob,
+  recordingSupported,
+} from "../video/recorder";
 import { DualPlayer, loadVideoFromFile } from "../video/dualPlayer";
 import { startWebcam, type WebcamHandle } from "../video/webcam";
 import { sampleVideoPoses, buildWarp } from "../video/sampler";
@@ -33,6 +39,7 @@ interface Dom {
   dtwBtn: HTMLButtonElement;
   playBtn: HTMLButtonElement;
   restartBtn: HTMLButtonElement;
+  recordBtn: HTMLButtonElement;
   scoreNow: HTMLElement;
   scoreAvg: HTMLElement;
   scoreFill: HTMLElement;
@@ -64,6 +71,7 @@ export function initApp(): void {
     dtwBtn: byId("dtw-btn"),
     playBtn: byId("play-btn"),
     restartBtn: byId("restart-btn"),
+    recordBtn: byId("record-btn"),
     scoreNow: byId("score-now"),
     scoreAvg: byId("score-avg"),
     scoreFill: byId("score-fill"),
@@ -81,6 +89,9 @@ export function initApp(): void {
   const limbTracker = new LimbDivergenceTracker(0.3);
   const scoreGraph = new ScoreGraph(dom.scoreHistory);
   const streamAligner = new StreamingAligner();
+  // Offscreen canvas the recorder captures; composited each frame while active.
+  const exportCanvas = document.createElement("canvas");
+  const recorder = new ComparisonRecorder();
 
   /** Clear the running score, its history graph, and the numeric display. */
   const resetScore = () => {
@@ -108,6 +119,10 @@ export function initApp(): void {
     const canPlay = refReady && testReady && modelReady;
     dom.playBtn.disabled = !canPlay;
     dom.restartBtn.disabled = !canPlay;
+    // Recording needs a playable comparison and browser support; once running,
+    // keep the button enabled so it can be stopped.
+    dom.recordBtn.disabled =
+      !recordingSupported() || (!canPlay && !recorder.active);
     // In file mode the button runs offline DTW (needs two seekable clips); in
     // live mode it toggles streaming alignment, which is always available.
     dom.dtwBtn.disabled =
@@ -215,6 +230,27 @@ export function initApp(): void {
     renderBreakdown(limbTracker.smoothed());
   };
 
+  // ---- Export / recording ----
+  const setRecordBtn = () => {
+    dom.recordBtn.textContent = recorder.active ? "■ Stop & save" : "● Export clip";
+    dom.recordBtn.classList.toggle("active", recorder.active);
+  };
+
+  /** Stop the recorder (if running) and download the resulting clip. */
+  const finishRecording = async () => {
+    if (!recorder.active) return;
+    try {
+      const blob = await recorder.stop();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      downloadBlob(blob, `dance-pose-coach-${stamp}.webm`);
+      setStatus(`Saved comparison clip (${(blob.size / 1e6).toFixed(1)} MB).`);
+    } catch (err) {
+      console.error(err);
+      setStatus("Recording failed to save.");
+    }
+    setRecordBtn();
+  };
+
   const player = new DualPlayer(dom.refVideo, dom.testVideo, {
     onFrame: () => void processFrame(),
     onPlay: () => {
@@ -231,6 +267,8 @@ export function initApp(): void {
           ? "Playback finished."
           : `Finished — average similarity ${avg.toFixed(1)}/100 over ${tracker.samples} frames.`,
       );
+      // If we were recording, finalize and download the clip now.
+      void finishRecording();
     },
   });
 
@@ -249,6 +287,7 @@ export function initApp(): void {
       // Score + per-limb breakdown first, so we know which limb (if any) to
       // highlight before drawing the test skeleton.
       let worstEdges: Array<[number, number]> | undefined;
+      let lagForFrame: number | null = null;
       if (refPose && testPose) {
         const refNorm = normalizePose(refPose);
         const testNorm = normalizePose(testPose);
@@ -262,6 +301,7 @@ export function initApp(): void {
             const m = streamAligner.match(testNorm);
             if (m) {
               refForScore = m.refPose;
+              lagForFrame = m.lagMs;
               setLagUi(m.lagMs);
             }
           }
@@ -288,6 +328,21 @@ export function initApp(): void {
         drawSkeleton(dom.testCanvas, testPose, { highlightEdges: worstEdges });
       } else {
         clearCanvas(dom.testCanvas);
+      }
+
+      // While recording, composite this scored frame onto the export canvas.
+      if (recorder.active) {
+        drawComposite(exportCanvas, {
+          refVideo: dom.refVideo,
+          refPose,
+          testVideo: dom.testVideo,
+          testPose,
+          testLabel: player.isLiveTest ? "Your attempt · live" : "Your attempt",
+          scoreNow: tracker.smoothed,
+          scoreAvg: tracker.average,
+          lagMs: lagForFrame,
+          worstEdges,
+        });
       }
     } catch (err) {
       console.error("Frame processing error", err);
@@ -364,6 +419,7 @@ export function initApp(): void {
   dom.testSource.addEventListener("change", async () => {
     const mode = dom.testSource.value; // "file" | "webcam"
     player.pause();
+    await finishRecording(); // don't leave a recording dangling across a switch
     testReady = false;
     liveSync = false; // streaming alignment doesn't carry across a source switch
     resetDtw(); // a source switch invalidates any alignment
@@ -503,7 +559,33 @@ export function initApp(): void {
     setStatus("Reset to start.");
   });
 
+  // ---- Export / record button ----
+  dom.recordBtn.addEventListener("click", async () => {
+    if (recorder.active) {
+      await finishRecording();
+      return;
+    }
+    try {
+      sizeComposite(exportCanvas); // fix dimensions before capturing the stream
+      recorder.start(exportCanvas);
+    } catch (err) {
+      console.error(err);
+      setStatus(err instanceof Error ? err.message : "Could not start recording.");
+      return;
+    }
+    setRecordBtn();
+    setStatus(
+      "Recording… the clip downloads when you press Stop or the routine ends.",
+    );
+    // Start playback so frames flow into the recording.
+    if (!player.playing) {
+      if (dom.refVideo.currentTime === 0) resetScore();
+      await player.play();
+    }
+  });
+
   updateControls();
   setScoreUi(null, null);
   renderBreakdown(limbTracker.smoothed());
+  setRecordBtn();
 }

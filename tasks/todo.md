@@ -56,7 +56,18 @@
       becomes "Live sync" in webcam mode; scores against the matched pose and
       shows the detected lag (ms behind). Verified with Chrome's fake camera
       (test clip piped in) — `demo/verify.mjs` scenario B.
-- [ ] Export/record a scored comparison clip (#6)
+- [x] **Export scored comparison clip** (#6) — `src/render/composite.ts`
+      (side-by-side panes + skeletons + score banner) fed by a transform-aware
+      `strokePose` refactored out of `skeleton.ts`; `src/video/recorder.ts`
+      (`ComparisonRecorder` = MediaRecorder over `canvas.captureStream`) → webm
+      download. Export button records during playback, auto-saves on Stop / clip
+      end, works for file + webcam. Verified (scenario C): downloads a valid
+      1280×596 webm with real frames.
+
+## Backlog — next loop
+- [ ] Trim/scrub the exported clip range before saving (currently whole routine)
+- [ ] Score history: mark the worst moments / scrub to them
+- [ ] Per-rep segmentation (detect repeats in the routine)
 
 ## Review notes
 - Default alignment is by playback progress; enable **DTW align** (#2) when the
