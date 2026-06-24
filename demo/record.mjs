@@ -94,10 +94,14 @@ async function main() {
       ],
     });
 
+    // Tall viewport so the video panes, the live score + history graph, and the
+    // per-limb breakdown are all in frame at once.
+    const VW = 1280;
+    const VH = 980;
     const context = await browser.newContext({
-      viewport: { width: 1280, height: 864 },
+      viewport: { width: VW, height: VH },
       deviceScaleFactor: 1,
-      recordVideo: { dir: OUT, size: { width: 1280, height: 864 } },
+      recordVideo: { dir: OUT, size: { width: VW, height: VH } },
     });
     // Playwright starts recording at context creation; remember that instant so
     // we can trim the model-loading lead-in out of the final clip.
@@ -130,20 +134,23 @@ async function main() {
       { timeout: 30000 },
     );
 
-    // Scroll so the two video panes + scoreboard are framed (hero scrolls off).
-    await page.evaluate(() => {
-      const stage = document.querySelector(".stage");
-      if (stage) {
-        const y = stage.getBoundingClientRect().top + window.scrollY - 24;
-        window.scrollTo({ top: y, behavior: "instant" });
-      }
-    });
-    await page.waitForTimeout(600);
-
     log("playing — recording comparison…");
     // Lead-in to trim later: time from record start to ~0.6s before play.
     playOffsetSec = Math.max(0, (Date.now() - recordStart) / 1000 - 0.6);
+    // Click first: Playwright auto-scrolls the button into view, which would
+    // undo any pre-scroll. We frame the stage→breakdown region *after* the click.
     await page.click("#play-btn");
+
+    // Scroll so the panes + scoreboard (live score + history graph) + breakdown
+    // are framed together (the hero scrolls off the top).
+    await page.evaluate(() => {
+      const stage = document.querySelector(".stage");
+      if (stage) {
+        const y = stage.getBoundingClientRect().top + window.scrollY - 20;
+        window.scrollTo(0, y);
+      }
+    });
+    await page.waitForTimeout(300);
 
     // Let the comparison run to completion (status flips to "Finished …").
     try {

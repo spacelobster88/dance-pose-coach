@@ -8,7 +8,10 @@ the browser via TensorFlow.js.
 
 > **Status:** the v0.1 video ⟷ video core now also ships **webcam live-follow**,
 > **DTW timeline alignment**, and a **per-limb divergence breakdown** (issues
-> [#1](../../issues/1)–[#3](../../issues/3)). See [`tasks/todo.md`](tasks/todo.md).
+> [#1](../../issues/1)–[#3](../../issues/3)), plus a **live score-history graph**,
+> **streaming DTW for the webcam**, and **export of a scored comparison clip**
+> (issues [#4](../../issues/4)–[#6](../../issues/6)). See
+> [`tasks/todo.md`](tasks/todo.md).
 
 ![dance-pose-coach demo](demo/dance-pose-coach-demo.gif)
 
@@ -45,6 +48,16 @@ the browser via TensorFlow.js.
 9. **Per-limb divergence breakdown** (#3) — a panel under the score ranks how far
    each limb (arms, legs, torso) is from the reference, and the worst-diverging
    limb is highlighted in red on the skeleton overlay so you know what to fix.
+10. **Live score-history graph** (#4) — a sparkline in the scoreboard plots the
+    similarity over the whole routine (raw per-frame + EMA-smoothed traces,
+    hue-coded), so you can see *where* you drifted, not just the current number.
+11. **Streaming DTW for the webcam** (#5) — in live mode the alignment button
+    becomes **Live sync**: it matches your camera pose to the closest recent
+    reference pose (lag compensation) so being a beat behind no longer tanks the
+    score, and shows the measured lag in ms.
+12. **Export a scored comparison clip** (#6) — **Export clip** records the
+    side-by-side comparison (both skeletons + a score banner) entirely in the
+    browser via `MediaRecorder` and downloads it as a `.webm` — no server.
 
 ## Quick start
 
