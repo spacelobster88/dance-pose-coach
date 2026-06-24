@@ -310,6 +310,57 @@ button:disabled {
   transition: width 0.12s linear, background 0.2s linear;
 }
 
+.score-graph {
+  margin-top: 22px;
+}
+
+.score-graph-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.sg-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.sg-dot {
+  display: inline-block;
+  width: 16px;
+  height: 0;
+  border-top-width: 2px;
+  border-top-style: solid;
+  margin-left: 8px;
+  transform: translateY(-2px);
+}
+
+.sg-dot-smooth {
+  border-top-color: hsl(96, 80%, 42%);
+}
+
+.sg-dot-raw {
+  border-top-color: rgba(20, 20, 26, 0.3);
+}
+
+#score-history {
+  display: block;
+  width: 100%;
+  height: 96px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
 #status {
   margin: 22px 0 0;
   color: var(--ink-soft);

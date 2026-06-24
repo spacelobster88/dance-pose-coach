@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "demo:assets": "node demo/prepare-assets.mjs",
-    "demo": "npm run build && node demo/record.mjs"
+    "demo": "npm run build && node demo/record.mjs",
+    "verify": "npm run build && node demo/verify.mjs"
   },
   "dependencies": {
     "@tensorflow-models/pose-detection": "^2.1.3",

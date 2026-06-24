@@ -45,10 +45,13 @@
 - [x] Verified: typecheck + build green; headless run shows score 99 / avg 98.8,
       DTW enabled, all five limb bars populated (right leg flagged worst)
 
-## Backlog — next loop
-- [ ] Score smoothing / EMA + on-screen score history graph
-- [ ] Real-time / streaming DTW for the webcam follow mode
-- [ ] Export/record a scored comparison clip
+## v0.3 — Backlog features (this loop, issues #4–#6)
+- [x] **Score history graph** (#4) — `src/render/scoreGraph.ts` (DPI-aware
+      sparkline, raw + EMA traces, 50/75/100 grid, hue-coded); scoreboard canvas
+      + `resetScore()` helper clears it on reset / clip / source / DTW change.
+      Reusable headless check added: `demo/verify.mjs` (`npm run verify`).
+- [ ] Real-time / streaming DTW for the webcam follow mode (#5)
+- [ ] Export/record a scored comparison clip (#6)
 
 ## Review notes
 - Default alignment is by playback progress; enable **DTW align** (#2) when the

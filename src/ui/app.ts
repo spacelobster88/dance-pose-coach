@@ -12,6 +12,7 @@ import {
   clearCanvas,
   syncCanvasToVideo,
 } from "../render/skeleton";
+import { ScoreGraph } from "../render/scoreGraph";
 import { DualPlayer, loadVideoFromFile } from "../video/dualPlayer";
 import { startWebcam, type WebcamHandle } from "../video/webcam";
 import { sampleVideoPoses, buildWarp } from "../video/sampler";
@@ -34,6 +35,7 @@ interface Dom {
   scoreNow: HTMLElement;
   scoreAvg: HTMLElement;
   scoreFill: HTMLElement;
+  scoreHistory: HTMLCanvasElement;
   status: HTMLElement;
   breakdownRows: HTMLElement;
 }
@@ -62,6 +64,7 @@ export function initApp(): void {
     scoreNow: byId("score-now"),
     scoreAvg: byId("score-avg"),
     scoreFill: byId("score-fill"),
+    scoreHistory: byId("score-history"),
     status: byId("status"),
     breakdownRows: byId("breakdown-rows"),
   };
@@ -71,6 +74,14 @@ export function initApp(): void {
   );
   const tracker = new ScoreTracker(0.3);
   const limbTracker = new LimbDivergenceTracker(0.3);
+  const scoreGraph = new ScoreGraph(dom.scoreHistory);
+
+  /** Clear the running score, its history graph, and the numeric display. */
+  const resetScore = () => {
+    tracker.reset();
+    scoreGraph.reset();
+    setScoreUi(null, null);
+  };
 
   let refReady = false;
   let testReady = false;
@@ -219,6 +230,9 @@ export function initApp(): void {
           if (result) {
             tracker.push(result.score);
             setScoreUi(tracker.smoothed, tracker.average);
+            if (tracker.smoothed !== null) {
+              scoreGraph.push(result.score, tracker.smoothed);
+            }
           }
           limbTracker.push(perJointDivergence(refNorm, testNorm));
           const worst = limbTracker.worst();
@@ -268,9 +282,8 @@ export function initApp(): void {
     try {
       await loadVideoFromFile(dom.refVideo, file);
       refReady = true;
-      tracker.reset();
+      resetScore();
       resetBreakdown();
-      setScoreUi(null, null);
       setStatus("Reference loaded.");
       player.renderOnce();
     } catch (err) {
@@ -290,9 +303,8 @@ export function initApp(): void {
     try {
       await loadVideoFromFile(dom.testVideo, file);
       testReady = true;
-      tracker.reset();
+      resetScore();
       resetBreakdown();
-      setScoreUi(null, null);
       setStatus("Test loaded.");
       player.renderOnce();
     } catch (err) {
@@ -315,9 +327,8 @@ export function initApp(): void {
     player.pause();
     testReady = false;
     resetDtw(); // a source switch invalidates any alignment
-    tracker.reset();
+    resetScore();
     resetBreakdown();
-    setScoreUi(null, null);
     clearCanvas(dom.testCanvas);
     updateControls();
 
@@ -403,9 +414,8 @@ export function initApp(): void {
       const { refToTest } = dtwAlign(ref.poses, test.poses);
       player.setWarp(buildWarp(ref.step, test.step, refToTest));
       dtwState = "on";
-      tracker.reset();
+      resetScore();
       resetBreakdown();
-      setScoreUi(null, null);
       player.restart();
       setStatus(
         "DTW alignment on — test frames matched to the reference by pose. Press Play.",
@@ -426,7 +436,7 @@ export function initApp(): void {
       player.pause();
     } else {
       // Restart scoring from a clean slate if both clips are at the start.
-      if (dom.refVideo.currentTime === 0) tracker.reset();
+      if (dom.refVideo.currentTime === 0) resetScore();
       setStatus("Playing — comparing poses…");
       await player.play();
     }
@@ -434,9 +444,8 @@ export function initApp(): void {
 
   dom.restartBtn.addEventListener("click", () => {
     player.pause();
-    tracker.reset();
+    resetScore();
     resetBreakdown();
-    setScoreUi(null, null);
     player.restart();
     setStatus("Reset to start.");
   });
