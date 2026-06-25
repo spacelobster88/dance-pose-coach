@@ -14,6 +14,102 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <style>
+      /* Strictness slider (uiux-1 / eng-A2) — reuses theme tokens from style.css. */
+      .strictness-row {
+        margin-top: 22px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .strictness-label {
+        color: var(--ink-faint);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-weight: 600;
+        flex-basis: 100%;
+        margin-bottom: 2px;
+      }
+      .strictness-ends {
+        color: var(--ink-faint);
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+      .strictness-row input[type="range"] {
+        flex: 1 1 160px;
+        min-width: 140px;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+      #strictness-readout {
+        margin-left: auto;
+        color: var(--ink-soft);
+        font-size: 0.8rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      /* Live-sync cluster: transport-delay calibration + reaction lag (uiux-1 §2). */
+      .livesync-cluster {
+        margin-top: 22px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 28px;
+      }
+      .livesync-cluster[hidden] {
+        display: none;
+      }
+      .calib-block {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .calib-block .label {
+        color: var(--ink-faint);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-weight: 600;
+      }
+      .calib-stat {
+        color: var(--ink-faint);
+        font-size: 0.85rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      /* Calibrated result pill — static accent-tinted version of .secondary.active. */
+      .calib-stat.calibrated {
+        align-self: stretch;
+        background: var(--accent);
+        color: #fff;
+        border-radius: 6px;
+        padding: 4px 10px;
+        text-align: center;
+      }
+      .calib-stat.error {
+        color: #d92d20;
+      }
+      /* Subtle activity pulse during countdown / clap window. */
+      .calib-stat.calibrating {
+        color: var(--ink);
+        animation: calib-pulse 1s ease-in-out infinite;
+      }
+      @keyframes calib-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      .livesync-note {
+        flex-basis: 100%;
+        margin: 2px 0 0;
+        color: var(--ink-faint);
+        font-size: 0.78rem;
+      }
+    </style>
   </head>
   <body>
     <div class="wrap">
@@ -89,12 +185,46 @@
             <div class="label">Session average</div>
             <span id="score-avg" class="sub">—</span>
           </div>
-          <div id="lag-stat" hidden>
-            <div class="label">Live sync · lag</div>
-            <span id="score-lag" class="sub">—</span><span class="unit">ms</span>
-          </div>
         </div>
         <div class="score-bar"><div id="score-fill"></div></div>
+        <div class="strictness-row">
+          <label class="strictness-label" for="strictness">Scoring strictness</label>
+          <span class="strictness-ends" aria-hidden="true">Lenient</span>
+          <input
+            id="strictness"
+            type="range"
+            min="2"
+            max="14"
+            step="1"
+            value="6"
+            aria-describedby="strictness-readout"
+          />
+          <span class="strictness-ends" aria-hidden="true">Strict</span>
+          <output id="strictness-readout" for="strictness">Standard · k 6</output>
+        </div>
+        <div id="livesync-cluster" class="livesync-cluster" hidden>
+          <div class="calib-block">
+            <div class="label">Transport delay</div>
+            <span id="calib-stat" class="calib-stat" aria-live="polite"
+              >Not calibrated</span
+            >
+            <button
+              id="calib-btn"
+              class="secondary"
+              title="Measure your camera + browser delay by clapping on the beat."
+            >
+              Calibrate sync
+            </button>
+          </div>
+          <div id="lag-stat" hidden>
+            <div class="label">Your reaction lag</div>
+            <span id="score-lag" class="sub">—</span><span class="unit">ms</span>
+          </div>
+          <p class="livesync-note">
+            Transport delay is your gear's built-in lag; we subtract it so the
+            reaction lag below reflects only you.
+          </p>
+        </div>
         <div class="score-graph">
           <div class="score-graph-head">
             <span>Score over the routine</span>

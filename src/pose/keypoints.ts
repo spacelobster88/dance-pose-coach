@@ -5,6 +5,12 @@
 export interface Keypoint {
   x: number;
   y: number;
+  /**
+   * Optional depth channel. For 2D detectors (MoveNet) this is undefined and
+   * every existing consumer ignores it. For 3D detectors (BlazePose) it carries
+   * the model's relative depth so 2D-only code keeps behaving identically.
+   */
+  z?: number;
   /** Detector confidence in [0, 1]; may be undefined for some backends. */
   score?: number;
   name?: string;
@@ -15,6 +21,12 @@ export interface Pose {
   keypoints: Keypoint[];
   /** Overall pose confidence in [0, 1] when provided by the model. */
   score?: number;
+  /**
+   * Optional 3D world landmarks in metric space (origin at the hip center),
+   * populated only by 3D detectors such as BlazePose. Same index order as
+   * `keypoints`. Undefined for MoveNet; 2D code paths never read it.
+   */
+  worldKeypoints?: Keypoint[];
 }
 
 /**

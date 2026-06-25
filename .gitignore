@@ -32,3 +32,6 @@ demo/*.jpg
 !demo/assets/reference.mp4
 !demo/assets/test.mp4
 !demo/dance-pose-coach-demo.mp4
+
+# Harness loop state
+.harness/

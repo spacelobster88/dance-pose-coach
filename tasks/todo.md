@@ -74,3 +74,7 @@
   two clips differ in tempo so frames are matched by pose instead.
 - MoveNet weights load from the TF Hub CDN at runtime (needs network on first
   run; cached by the browser afterward).
+
+## dance-pose-coach v0.4 — deferred / optional (post-v0.4)
+- [ ] **Real clap-audio onset detection** for sync calibration. v0.4 ships a working transport-delay estimator (`syncCalib.ts`) + countdown/clap UI, but the UI currently feeds it a synthetic pipeline-latency fallback (MediaTrackSettings.latency or ~120ms). Replace with real Web Audio onset detection of the clap to measure true end-to-end transport delay. (from eng-C1 review)
+- [ ] **True wide-angle lens de-distortion** (camera-intrinsics / checkerboard calibration). v0.4 handles viewpoint via BlazePose 3D + Procrustes; real lens distortion correction is a further optional layer. (from arch-1 / Issue B)

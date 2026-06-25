@@ -11,6 +11,14 @@ import {
 export interface NormalizedPose {
   /** Same length/order as the source keypoints. */
   points: Array<{ x: number; y: number; valid: boolean }>;
+  /**
+   * Optional 3D channel, present only when the source `Pose` carried
+   * `worldKeypoints` (BlazePose, eng-B1). Same index order as `points`. When
+   * present, scoring aligns the two poses in this viewpoint-invariant 3D frame
+   * via Procrustes (procrustes.ts) before comparing; when absent the existing
+   * 2D bone-direction path runs unchanged.
+   */
+  points3d?: Array<{ x: number; y: number; z: number; valid: boolean }>;
 }
 
 export const DEFAULT_MIN_KEYPOINT_SCORE = 0.3;
@@ -106,5 +114,56 @@ export function normalizePose(
     };
   });
 
-  return { points };
+  // Attach the 3D channel when 3D world landmarks are available (BlazePose).
+  // World landmarks are metric with origin at the hip center; we only translate
+  // them to their own valid centroid and divide by the same torso-ish scale so
+  // the magnitudes are comparable. Procrustes (similarity.ts) then removes the
+  // remaining viewpoint rotation before comparison. 2D-only poses skip this.
+  const world = pose.worldKeypoints;
+  let points3d:
+    | Array<{ x: number; y: number; z: number; valid: boolean }>
+    | undefined;
+  if (world && world.length >= kp.length) {
+    const validFlags = kp.map((k) => (k.score ?? 0) >= minScore);
+    let cx = 0,
+      cy = 0,
+      cz = 0,
+      cn = 0;
+    for (let i = 0; i < kp.length; i++) {
+      if (!validFlags[i]) continue;
+      const w = world[i];
+      cx += w.x;
+      cy += w.y;
+      cz += w.z ?? 0;
+      cn++;
+    }
+    if (cn > 0) {
+      cx /= cn;
+      cy /= cn;
+      cz /= cn;
+      // Scale by RMS radius of valid world points so units match roughly.
+      let s = 0;
+      for (let i = 0; i < kp.length; i++) {
+        if (!validFlags[i]) continue;
+        const w = world[i];
+        const dx = w.x - cx;
+        const dy = w.y - cy;
+        const dz = (w.z ?? 0) - cz;
+        s += dx * dx + dy * dy + dz * dz;
+      }
+      s = Math.sqrt(s / cn);
+      if (s < 1e-9) s = 1;
+      points3d = kp.map((_, i) => {
+        const w = world[i];
+        return {
+          x: (w.x - cx) / s,
+          y: (w.y - cy) / s,
+          z: ((w.z ?? 0) - cz) / s,
+          valid: validFlags[i],
+        };
+      });
+    }
+  }
+
+  return points3d ? { points, points3d } : { points };
 }

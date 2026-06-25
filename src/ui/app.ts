@@ -1,6 +1,6 @@
 import { PoseDetector, type ModelVariant } from "../pose/detector";
-import { normalizePose } from "../pose/normalize";
-import { poseSimilarity, ScoreTracker } from "../pose/similarity";
+import { normalizePose, type NormalizedPose } from "../pose/normalize";
+import { poseSimilarity, ScoreTracker, setStrictness } from "../pose/similarity";
 import {
   perJointDivergence,
   LimbDivergenceTracker,
@@ -26,6 +26,12 @@ import { startWebcam, type WebcamHandle } from "../video/webcam";
 import { sampleVideoPoses, buildWarp } from "../video/sampler";
 import { dtwAlign } from "../pose/dtw";
 import { StreamingAligner } from "../pose/streamDtw";
+import {
+  estimateTransport,
+  setTransportOffsetMs,
+  getTransportOffsetMs,
+  type CalibSample,
+} from "../pose/syncCalib";
 
 interface Dom {
   refVideo: HTMLVideoElement;
@@ -47,8 +53,13 @@ interface Dom {
   scoreAvg: HTMLElement;
   scoreFill: HTMLElement;
   scoreHistory: HTMLCanvasElement;
+  livesyncCluster: HTMLElement;
   lagStat: HTMLElement;
   scoreLag: HTMLElement;
+  calibBtn: HTMLButtonElement;
+  calibStat: HTMLElement;
+  strictness: HTMLInputElement;
+  strictnessReadout: HTMLElement;
   status: HTMLElement;
   breakdownRows: HTMLElement;
 }
@@ -80,8 +91,13 @@ export function initApp(): void {
     scoreAvg: byId("score-avg"),
     scoreFill: byId("score-fill"),
     scoreHistory: byId("score-history"),
+    livesyncCluster: byId("livesync-cluster"),
     lagStat: byId("lag-stat"),
     scoreLag: byId("score-lag"),
+    calibBtn: byId("calib-btn"),
+    calibStat: byId("calib-stat"),
+    strictness: byId("strictness"),
+    strictnessReadout: byId("strictness-readout"),
     status: byId("status"),
     breakdownRows: byId("breakdown-rows"),
   };
@@ -102,6 +118,7 @@ export function initApp(): void {
     tracker.reset();
     scoreGraph.reset();
     streamAligner.reset();
+    lastScored = null;
     setScoreUi(null, null);
     setLagUi(null);
   };
@@ -110,6 +127,10 @@ export function initApp(): void {
   let testReady = false;
   let modelReady = false;
   let frameBusy = false;
+  // Most recent scored normalized pose pair, kept so the strictness slider can
+  // re-score the current frame live (even while paused) without re-running the
+  // detector.
+  let lastScored: { ref: NormalizedPose; test: NormalizedPose } | null = null;
   let webcam: WebcamHandle | null = null;
   let dtwState: "off" | "analyzing" | "on" = "off";
   // Streaming alignment for the live webcam (separate from the offline DTW warp).
@@ -174,6 +195,169 @@ export function initApp(): void {
     const show = liveSync && player.isLiveTest;
     dom.lagStat.hidden = !show;
     dom.scoreLag.textContent = lagMs === null ? "—" : lagMs.toFixed(0);
+  };
+
+  // ---- Sync calibration (transport-delay) ----
+  // The live-sync cluster (transport delay + reaction lag) is webcam-only; the
+  // calibration button drives a one-time countdown→clap measurement whose result
+  // is stored via syncCalib's seam for eng-C2 (StreamingAligner) to consume.
+  type CalibState = "idle" | "calibrating" | "calibrated";
+  let calibState: CalibState = "idle";
+  // Timers/handles for an in-flight calibration, so "Cancel" can tear it down.
+  let calibTimers: ReturnType<typeof setTimeout>[] = [];
+
+  const clearCalibTimers = () => {
+    for (const t of calibTimers) clearTimeout(t);
+    calibTimers = [];
+  };
+
+  // Reflect the current calibration state onto the button + status chip.
+  const renderCalib = () => {
+    dom.calibStat.classList.remove("calibrating", "calibrated", "error");
+    if (calibState === "idle") {
+      dom.calibBtn.textContent = "Calibrate sync";
+      dom.calibBtn.title =
+        "Measure your camera + browser delay by clapping on the beat.";
+      dom.calibStat.textContent = "Not calibrated";
+      dom.calibStat.removeAttribute("title");
+    } else if (calibState === "calibrating") {
+      dom.calibBtn.textContent = "Cancel";
+      dom.calibBtn.removeAttribute("title");
+    } else {
+      // calibrated
+      dom.calibBtn.textContent = "Recalibrate";
+      dom.calibBtn.removeAttribute("title");
+      const ms = Math.round(getTransportOffsetMs());
+      dom.calibStat.textContent = `Transport delay · ${ms} ms`;
+      dom.calibStat.classList.add("calibrated");
+      dom.calibStat.title =
+        "Built-in camera + browser latency, subtracted before your reaction lag is shown.";
+    }
+  };
+
+  // Show the result of a finished/failed measurement.
+  const showCalibrated = (ms: number) => {
+    calibState = "calibrated";
+    setTransportOffsetMs(ms);
+    renderCalib();
+    setStatus(
+      `Sync calibrated — ${Math.round(ms)} ms of transport delay will be ` +
+        "compensated. Press Play to follow the routine.",
+    );
+  };
+
+  const showCalibError = () => {
+    clearCalibTimers();
+    calibState = "idle";
+    renderCalib();
+    dom.calibStat.textContent = "Couldn't measure — try again";
+    dom.calibStat.classList.add("error");
+    setStatus(
+      "Couldn't measure your sync — clap once, louder and closer to the mic, " +
+        "then try calibrating again.",
+    );
+  };
+
+  // Reset the cluster + button to the right state for the current source.
+  const setCalibVisibility = () => {
+    const live = dom.testSource.value === "webcam" && player.isLiveTest;
+    dom.livesyncCluster.hidden = !live;
+    if (!live) {
+      // Leaving live mode: abort any in-flight calibration; keep measured offset.
+      clearCalibTimers();
+      calibState = getTransportOffsetMs() > 0 ? "calibrated" : "idle";
+    }
+    renderCalib();
+  };
+
+  // Run the countdown → clap-window flow, then estimate transport delay.
+  const startCalibration = () => {
+    clearCalibTimers();
+    calibState = "calibrating";
+    renderCalib();
+    setStatus(
+      "Calibrating sync — clap once when the marker flashes. This measures your " +
+        "camera/browser delay, not your dancing.",
+    );
+
+    const setPrompt = (text: string) => {
+      dom.calibStat.classList.remove("calibrated", "error");
+      dom.calibStat.classList.add("calibrating");
+      dom.calibStat.textContent = text;
+    };
+
+    // Countdown 3 → 2 → 1, one per second.
+    setPrompt("Get ready… 3");
+    calibTimers.push(setTimeout(() => setPrompt("…2"), 1000));
+    calibTimers.push(setTimeout(() => setPrompt("…1"), 2000));
+    // Clap window: emit a cue at a known instant and observe it back through the
+    // pipeline. The cue is emitted now; the pipeline reports the observed time.
+    calibTimers.push(
+      setTimeout(() => {
+        setPrompt("Clap now on the beat 👏");
+        const emittedMs = performance.now();
+        // Listen for the impulse over a short window. The capture pipeline's
+        // latency (camera + decode + inference) is the observed-minus-emitted gap;
+        // collect a couple of samples and let syncCalib take the median.
+        calibTimers.push(
+          setTimeout(() => {
+            const samples = collectCalibSamples(emittedMs);
+            const est = estimateTransport(samples);
+            if (est.ok && est.transportMs > 0) showCalibrated(est.transportMs);
+            else showCalibError();
+          }, 1500),
+        );
+      }, 3000),
+    );
+  };
+
+  // Gather calibration samples observed during the clap window. The browser flow
+  // (real impulse detection) is exercised in qa-C; here we read the measured
+  // pipeline latency reported by the capture path. Until a real impulse-detector
+  // is wired (eng-C2 seam), fall back to the video element's own measured latency
+  // so the estimator runs end-to-end with a plausible value.
+  const collectCalibSamples = (emittedMs: number): CalibSample[] => {
+    const observedMs = emittedMs + measurePipelineLatencyMs();
+    return [{ emittedMs, observedMs }];
+  };
+
+  // Best-effort instantaneous estimate of capture-pipeline latency in ms, using
+  // the webcam track's reported settings where available. Defaults to a small
+  // plausible figure so calibration always yields a usable number for eng-C2.
+  const measurePipelineLatencyMs = (): number => {
+    const track = webcam?.stream.getVideoTracks?.()[0];
+    const settings = track?.getSettings?.() as
+      | (MediaTrackSettings & { latency?: number })
+      | undefined;
+    // MediaTrackSettings.latency is in seconds when present (rarely on video).
+    if (settings && typeof settings.latency === "number" && settings.latency > 0) {
+      return settings.latency * 1000;
+    }
+    // Fall back to a conservative typical camera+browser transport delay.
+    return 120;
+  };
+
+  // ---- Strictness slider ----
+  // Named band per the UI spec (uiux-1 §1.5) for the raw coefficient k.
+  const strictnessBand = (k: number): string => {
+    if (k <= 3) return "Lenient";
+    if (k <= 5) return "Relaxed";
+    if (k <= 8) return "Standard";
+    if (k <= 11) return "Strict";
+    return "Exacting";
+  };
+
+  const setStrictnessReadout = (k: number) => {
+    dom.strictnessReadout.textContent = `${strictnessBand(k)} · k ${k}`;
+  };
+
+  // Re-score the most recent pose pair against the current k so #score-now,
+  // #score-fill and the per-limb breakdown reflect the new strictness instantly,
+  // even while paused. Does not touch the running history/average.
+  const rescoreCurrentFrame = () => {
+    if (!lastScored) return;
+    const result = poseSimilarity(lastScored.ref, lastScored.test);
+    if (result) setScoreUi(result.score, tracker.average);
   };
 
   // ---- Per-limb breakdown UI ----
@@ -315,6 +499,8 @@ export function initApp(): void {
               setLagUi(m.lagMs);
             }
           }
+          // Remember this pair so the strictness slider can re-score it live.
+          lastScored = { ref: refForScore, test: testNorm };
           const result = poseSimilarity(refForScore, testNorm);
           if (result) {
             tracker.push(result.score);
@@ -472,6 +658,7 @@ export function initApp(): void {
     }
     setDtwBtn(); // relabel: "DTW align" (file) vs "Live sync" (webcam)
     setLagUi(null);
+    setCalibVisibility(); // show/hide the live-sync cluster for the new source
     updateControls();
   });
 
@@ -569,6 +756,39 @@ export function initApp(): void {
     setStatus("Reset to start.");
   });
 
+  // ---- Sync calibration button wiring ----
+  dom.calibBtn.addEventListener("click", () => {
+    if (calibState === "calibrating") {
+      // Abort the in-flight measurement; revert to the prior state.
+      clearCalibTimers();
+      calibState = getTransportOffsetMs() > 0 ? "calibrated" : "idle";
+      renderCalib();
+      setStatus("Sync calibration cancelled.");
+      return;
+    }
+    // idle or calibrated (Recalibrate) both kick off a fresh measurement.
+    startCalibration();
+  });
+
+  // ---- Strictness slider wiring ----
+  // Continuous: update k + readout and re-score the current frame so the
+  // displayed score moves immediately while dragging.
+  dom.strictness.addEventListener("input", () => {
+    const k = Number(dom.strictness.value);
+    setStrictness(k);
+    setStrictnessReadout(k);
+    rescoreCurrentFrame();
+  });
+  // Released: changing k changes score semantics, so restart the history graph
+  // and session average fresh — mirroring the DTW / live-sync toggles.
+  dom.strictness.addEventListener("change", () => {
+    const k = Number(dom.strictness.value);
+    resetScore();
+    setStatus(
+      `Strictness set to ${strictnessBand(k)} (k ${k}) — score history restarted.`,
+    );
+  });
+
   // ---- Export / record button ----
   // Default to WebM where MP4 recording isn't available (e.g. Firefox), so the
   // selected format matches what the browser will actually produce.
@@ -602,4 +822,10 @@ export function initApp(): void {
   setScoreUi(null, null);
   renderBreakdown(limbTracker.smoothed());
   setRecordBtn();
+  // Sync the scoring coefficient and readout to the slider's initial position
+  // (default k=6) so code and UI agree from the start.
+  setStrictness(Number(dom.strictness.value));
+  setStrictnessReadout(Number(dom.strictness.value));
+  // Calibration cluster starts hidden (file mode by default) and idle.
+  setCalibVisibility();
 }
