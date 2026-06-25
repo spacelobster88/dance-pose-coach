@@ -10,16 +10,19 @@ the browser via TensorFlow.js.
 > **DTW timeline alignment**, and a **per-limb divergence breakdown** (issues
 > [#1](../../issues/1)–[#3](../../issues/3)), plus a **live score-history graph**,
 > **streaming DTW for the webcam**, and **export of a scored comparison clip**
-> (issues [#4](../../issues/4)–[#6](../../issues/6)). See
-> [`tasks/todo.md`](tasks/todo.md).
+> (issues [#4](../../issues/4)–[#6](../../issues/6)). **v0.4** reworks the core:
+> **viewpoint-robust strict scoring**, **3D Procrustes alignment**, and
+> **sync-calibrated adaptive lag**. See [`tasks/todo.md`](tasks/todo.md).
 
 ![dance-pose-coach demo](demo/dance-pose-coach-demo.gif)
 
 > Demo footage derived from "Squat - exercise demonstration video" by
 > FitnessScape, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0). The
-> right clip is the same movement zoomed + time-shifted, so the score stays high
-> (normalization handles zoom/position) while still reacting to the timing
-> drift. Regenerate anytime with `npm run demo` — see [`demo/`](demo/).
+> right clip is the same movement zoomed + time-shifted. Under the **v0.4 strict
+> scoring** the zoom is still ignored (3D-normalized), but the timing drift now
+> genuinely pulls the score down — the run above settles around a ~74 average
+> with live frames dipping into the 40s, instead of the old metric's near-100.
+> Regenerate anytime with `npm run demo` — see [`demo/`](demo/).
 
 ## Features (v0.1)
 
@@ -59,6 +62,29 @@ the browser via TensorFlow.js.
     side-by-side comparison (both skeletons + a score banner) entirely in the
     browser via `MediaRecorder` and downloads it as a `.webm` — no server.
 
+## v0.4 — viewpoint-robust strict scoring
+
+The original score was a cosine similarity over normalized **2D** coordinates,
+which floored around ~75 for any upright human and stayed near 100 even for
+visibly wrong poses. v0.4 reworks the comparison core:
+
+13. **Strict joint-angle scoring** — `src/pose/similarity.ts` +
+    `src/pose/boneAngles.ts`: similarity is now computed over **bone vectors /
+    joint angles** and passed through an **exponential-decay curve** keyed to the
+    mean joint error, so "very different" actually scores low. A **strictness
+    slider** tunes how punishing the curve is (backward-compatible default).
+14. **3D Procrustes alignment** — `src/pose/procrustes.ts` +
+    `src/pose/detector.ts`: the detector can use **MediaPipe BlazePose GHUM**'s
+    3D world landmarks, and the two poses are **Procrustes-aligned** into a
+    shared, viewpoint-independent 3D canonical frame before scoring — so a
+    different camera angle no longer corrupts the comparison.
+15. **Sync-calibrated adaptive lag** — `src/pose/syncCalib.ts` +
+    `src/pose/streamDtw.ts`: a one-time **countdown/clap calibration** estimates
+    end-to-end **transport delay** separately from human reaction lag, and the
+    streaming aligner adapts its `maxLagMs` from that estimate instead of a fixed
+    cap. (Real clap-audio onset detection and true lens de-distortion are noted
+    as optional follow-ups in [`tasks/todo.md`](tasks/todo.md).)
+
 ## Quick start
 
 ```bash
@@ -85,12 +111,20 @@ npm run preview  # serve the built bundle locally
 
 For each video frame we:
 
-1. Run MoveNet to get 17 `(x, y, score)` keypoints.
-2. Drop low-confidence keypoints, then **normalize**: translate so the mid-hip
-   sits at the origin and scale by torso length (shoulder-to-hip distance).
-3. Flatten the kept, shared keypoints into a vector and compute **cosine
-   similarity** between the reference vector and the test vector.
-4. Map similarity `[-1, 1] → [0, 100]` for display.
+1. Run the detector (MoveNet 2D, or **BlazePose GHUM** for 3D world landmarks)
+   to get per-keypoint `(x, y[, z], score)`.
+2. Drop low-confidence keypoints, then **normalize**: hip-centered and
+   torso-scaled, and — when 3D is available — **Procrustes-aligned** into a
+   shared, viewpoint-independent canonical frame (v0.4).
+3. Compare poses by **bone-vector / joint-angle** difference rather than raw
+   coordinate cosine (v0.4), so the metric tracks limb articulation, not gross
+   body shape.
+4. Map the **mean joint error** through an **exponential-decay strict curve**
+   (strictness slider) to a 0–100 score, so large deviations score genuinely low.
+
+> Pre-v0.4 the score was a cosine over normalized 2D coordinates mapped
+> `[-1, 1] → [0, 100]`; it floored near ~75 and rarely dropped, which is why the
+> strict rework landed.
 
 By default alignment is by **playback progress** (not content), so keep the two
 clips roughly the same length and starting on the same beat. When tempos differ,
@@ -110,10 +144,14 @@ the residual difference by body part.
 ```
 src/
   pose/
-    detector.ts     # MoveNet wrapper, Lightning/Thunder switch
-    normalize.ts    # hip-center + torso-scale normalization
-    similarity.ts   # cosine similarity + score mapping
+    detector.ts     # MoveNet + BlazePose GHUM (3D) wrapper, model switch
+    normalize.ts    # hip-center + torso-scale (+ 3D normalization, v0.4)
+    procrustes.ts   # 3D Procrustes alignment to a canonical frame (v0.4)
+    boneAngles.ts   # bone-vector / joint-angle features (v0.4)
+    similarity.ts   # joint-angle similarity + exponential strict curve (v0.4)
+    syncCalib.ts    # transport-delay estimator for the live aligner (v0.4)
     dtw.ts          # banded DTW alignment over pose sequences (#2)
+    streamDtw.ts    # streaming lag-compensated aligner for webcam (#5)
     perJoint.ts     # per-limb divergence + worst-limb tracking (#3)
     keypoints.ts    # COCO-17 names, skeleton edges, types
   render/
