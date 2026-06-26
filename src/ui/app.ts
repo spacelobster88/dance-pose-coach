@@ -11,11 +11,12 @@ import { PoseTracker, TargetLock, type TrackedPose } from "../pose/tracker";
 import type { Pose } from "../pose/keypoints";
 import {
   drawSkeleton,
-  drawSkeletons,
+  drawMultiTarget,
   clearCanvas,
   syncCanvasToVideo,
-  type SkeletonLayer,
+  mapDisplayToSource,
 } from "../render/skeleton";
+import type { LockStatus } from "../pose/tracker";
 import { ScoreGraph } from "../render/scoreGraph";
 import { RunRecorder, formatTime } from "../pose/report";
 import { ReportPanel } from "../render/reportPanel";
@@ -52,6 +53,10 @@ interface Dom {
   testVideo: HTMLVideoElement;
   refCanvas: HTMLCanvasElement;
   testCanvas: HTMLCanvasElement;
+  testWrap: HTMLElement;
+  lockOverlay: HTMLElement;
+  lockBadge: HTMLElement;
+  relockBtn: HTMLButtonElement;
   refFile: HTMLInputElement;
   testFile: HTMLInputElement;
   testSource: HTMLSelectElement;
@@ -100,6 +105,10 @@ export function initApp(): void {
     testVideo: byId("test-video"),
     refCanvas: byId("ref-canvas"),
     testCanvas: byId("test-canvas"),
+    testWrap: byId("test-wrap"),
+    lockOverlay: byId("lock-overlay"),
+    lockBadge: byId("lock-badge"),
+    relockBtn: byId("relock-btn"),
     refFile: byId("ref-file"),
     testFile: byId("test-file"),
     testSource: byId("test-source"),
@@ -560,18 +569,42 @@ export function initApp(): void {
       else clearCanvas(canvas);
       return;
     }
-    const layers: SkeletonLayer[] = tracked.map((t) => ({
-      pose: t.pose,
-      dim: t.id !== lockedId,
-      highlightEdges: t.id === lockedId ? worstEdges : undefined,
-    }));
-    // If the locked dancer is coasting (not detected this frame), still draw the
-    // held pose so the lock is visible.
-    if (displayPose && !tracked.some((t) => t.id === lockedId)) {
-      layers.push({ pose: displayPose, dim: false, highlightEdges: worstEdges });
-    }
-    if (layers.length) drawSkeletons(canvas, layers);
-    else clearCanvas(canvas);
+    // Multi: every detected body faded, the locked dancer at full strength —
+    // plus the held pose if the locked dancer is coasting this frame.
+    drawMultiTarget(canvas, tracked, lockedId, {
+      highlightEdges: worstEdges,
+      held: displayPose,
+    });
+  };
+
+  // True when the live-webcam multi-person pick/hold UX is active.
+  const isLiveMulti = () => player.isLiveTest && personMode === "multi";
+
+  // Friendly lock-status text for the on-feed badge (live-multi only).
+  const LOCK_TEXT: Record<LockStatus, string> = {
+    tracking: "Locked: you",
+    coasting: "Holding your spot…",
+    searching: "Looking for a dancer…",
+    lost: "Step back in — finding you",
+  };
+
+  // Reflect the lock status onto the on-feed badge + show/hide the whole
+  // overlay (and the tap-to-relock affordance) for the current source/mode.
+  const updateLockUi = (status: LockStatus | null) => {
+    const live = isLiveMulti();
+    dom.lockOverlay.hidden = !live;
+    dom.testWrap.classList.toggle("live-multi", live);
+    if (!live) return;
+    const s = status ?? "searching";
+    dom.lockBadge.textContent = LOCK_TEXT[s];
+    dom.lockBadge.classList.remove("tracking", "coasting", "searching", "lost");
+    dom.lockBadge.classList.add(s);
+  };
+
+  // Mirror the live webcam feed (selfie view) + its overlay canvas; the file
+  // path is never mirrored. Tap mapping undoes the flip via mapDisplayToSource.
+  const updateMirror = () => {
+    dom.testWrap.classList.toggle("mirrored", player.isLiveTest);
   };
 
   async function processFrame(): Promise<void> {
@@ -673,6 +706,8 @@ export function initApp(): void {
 
       renderOverlay(dom.refCanvas, refTracked, refPose, refSel.id);
       renderOverlay(dom.testCanvas, testTracked, testPose, testSel.id, worstEdges);
+      // Keep the live-multi lock badge in step with the dancer lock.
+      if (isLiveMulti()) updateLockUi(testSel.status);
 
       // While recording, composite this scored frame onto the export canvas.
       if (recorder.active) {
@@ -783,8 +818,12 @@ export function initApp(): void {
         webcam = await startWebcam(dom.testVideo);
         player.setLiveTest(true);
         testReady = true;
+        updateMirror(); // selfie-mirror the live feed + overlay
+        updateLockUi(testLock.id !== null ? "tracking" : "searching");
         setStatus(
-          "Webcam live. Load a reference routine and press Play to follow along.",
+          personMode === "multi"
+            ? "Webcam live — multi-person. Press Play; tap a dancer in “Your attempt” to lock onto them, or use Re-lock for the central one."
+            : "Webcam live. Load a reference routine and press Play to follow along.",
         );
         player.renderOnce();
       } catch (err) {
@@ -797,6 +836,8 @@ export function initApp(): void {
         dom.testFileControl.style.display = "";
         dom.testHeading.textContent = "Your attempt";
         player.setLiveTest(false);
+        updateMirror();
+        updateLockUi(null);
       }
     } else {
       stopWebcam();
@@ -805,6 +846,8 @@ export function initApp(): void {
       dom.testVideo.removeAttribute("src");
       dom.testFileControl.style.display = "";
       dom.testHeading.textContent = "Your attempt";
+      updateMirror(); // file feed is never mirrored
+      updateLockUi(null); // hide the live lock overlay
       setStatus("Load a test video file.");
     }
     setDtwBtn(); // relabel: "DTW align" (file) vs "Live sync" (webcam)
@@ -863,21 +906,46 @@ export function initApp(): void {
     } else {
       setStatus("Single-person mode.");
     }
+    // Show/hide the live lock badge + tap affordance for the new mode.
+    updateLockUi(isLiveMulti() ? "searching" : null);
     player.renderOnce();
     updateControls();
   });
 
-  // Click a body in the test overlay (multi mode) to lock onto that dancer.
-  dom.testCanvas.addEventListener("click", (ev) => {
+  // Tap/click a body in the test feed (multi mode) to (re)lock onto that dancer.
+  // The wrap (not the canvas) is the target so the overlay's Re-lock button can
+  // sit on top; mapping undoes the object-fit letterbox AND the selfie mirror,
+  // so the tap lands on the right person in source-video pixels.
+  const tapToRelock = (ev: PointerEvent | MouseEvent) => {
     if (personMode !== "multi") return;
-    const rect = dom.testCanvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    // Map the click from CSS pixels into the canvas's source-video pixel space.
-    pendingTestClick = {
-      x: (ev.clientX - rect.left) * (dom.testCanvas.width / rect.width),
-      y: (ev.clientY - rect.top) * (dom.testCanvas.height / rect.height),
-    };
+    // Don't treat clicks on the overlay controls (Re-lock button) as taps.
+    if ((ev.target as HTMLElement)?.closest(".lock-relock")) return;
+    const rect = dom.testWrap.getBoundingClientRect();
+    const w = dom.testVideo.videoWidth;
+    const h = dom.testVideo.videoHeight;
+    if (!w || !h) return;
+    const pt = mapDisplayToSource(
+      ev.clientX,
+      ev.clientY,
+      rect,
+      w,
+      h,
+      player.isLiveTest, // mirrored only for the live selfie feed
+    );
+    if (!pt) return; // tap landed in the letterbox margin — ignore
+    pendingTestClick = pt;
     // If paused, re-render once so the new selection shows immediately.
+    if (!player.playing) player.renderOnce();
+  };
+  dom.testWrap.addEventListener("click", tapToRelock);
+
+  // Re-lock button (live-multi only): re-acquire the most central dancer by
+  // dropping the lock so the next frame's autoPick re-picks it.
+  dom.relockBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    testLock.reset();
+    pendingTestClick = null;
+    updateLockUi("searching");
     if (!player.playing) player.renderOnce();
   });
 
@@ -1122,4 +1190,7 @@ export function initApp(): void {
   setCalibVisibility();
   // Test overlay is only clickable for dancer selection in multi-person mode.
   dom.testCanvas.classList.toggle("selectable", personMode === "multi");
+  // Lock badge + selfie mirror start off (file mode, default single-person).
+  updateMirror();
+  updateLockUi(isLiveMulti() ? "searching" : null);
 }

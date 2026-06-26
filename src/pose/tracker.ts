@@ -275,6 +275,22 @@ export class TargetLock {
     this.coast = 0;
   }
 
+  /**
+   * Public relock-by-point: choose the body under (or nearest) a source-pixel
+   * point and lock onto it immediately, returning the picked detection (or null
+   * if there were no candidates). Used by the live-webcam tap-to-relock handler
+   * so it doesn't have to wait a frame for `select({ click })` — and so the tap
+   * logic isn't duplicated outside this class.
+   */
+  pickAt(
+    tracked: TrackedPose[],
+    pt: { x: number; y: number },
+  ): TrackedPose | null {
+    const picked = this.pickByPoint(tracked, pt);
+    if (picked) this.acquire(picked);
+    return picked;
+  }
+
   private pickByPoint(
     tracked: TrackedPose[],
     pt: { x: number; y: number },
