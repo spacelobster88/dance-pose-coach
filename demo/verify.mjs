@@ -961,6 +961,40 @@ async function verifyFileMode() {
       reportInfo.fix ? `"${reportInfo.fix}"` : "no correction text",
     );
 
+    // AI coaching (#15): with frames recorded from the run, the offline
+    // rule-based provider must turn the report into rendered Markdown coaching.
+    // Force the deterministic, no-network provider so this stays hermetic.
+    // Drive via evaluate (set value + fire change, then click) so the assertion
+    // doesn't depend on the panel being scrolled into view during playback.
+    await page.evaluate(() => {
+      const sel = document.getElementById("coach-provider");
+      sel.value = "rule-based";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      document.getElementById("coach-btn").click();
+    });
+    await page.waitForFunction(
+      () => {
+        const p = document.getElementById("coach-panel");
+        return p && !p.classList.contains("empty") && /Analysing/.test(p.textContent) === false &&
+          p.querySelector("h3, ul, ol, strong");
+      },
+      { timeout: 5000 },
+    ).catch(() => {});
+    const coach = await page.evaluate(() => {
+      const p = document.getElementById("coach-panel");
+      const s = document.getElementById("coach-source");
+      return {
+        hasHeading: !!p?.querySelector("h3"),
+        text: p?.textContent || "",
+        source: s?.textContent || "",
+        sourceHidden: s?.hidden ?? true,
+      };
+    });
+    check(coach.hasHeading && coach.text.length > 40, "A: AI coaching panel renders Markdown",
+      `${coach.text.length} chars`);
+    check(/rule-based/i.test(coach.source) && !coach.sourceHidden,
+      "A: coaching source credits the rule-based provider", `"${coach.source}"`);
+
     await page.click("#restart-btn");
     await page.waitForTimeout(300);
     const reportCleared = await page.$eval("#report", (e) => e.hidden);

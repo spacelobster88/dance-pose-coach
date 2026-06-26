@@ -64,31 +64,43 @@
       end, works for file + webcam. Verified (scenario C): downloads a valid
       1280×596 webm with real frames.
 
-## dance-pose-coach v0.5 — post-run improvement report (#9)
-- [x] **`src/pose/report.ts`** — `RunRecorder` accumulates per-bone reference-vs-test
-      unit-direction vectors against the aligned reference timeline; `buildReport`
-      buckets into fixed time windows (default 3s), ranks limbs per segment by mean
-      bone-direction error (degrees), and surfaces the run-wide top-N limb×segment
-      opportunities. `correctionFor` turns the *signed* averaged bone delta into a
-      directional fix ("Raise your left elbow…", "Level your shoulders").
-- [x] **`src/render/reportPanel.ts`** — renders "Biggest opportunities" + a
-      segment-by-segment table; each row seeks both videos to that moment.
-- [x] **`DualPlayer.seek(refTime)`** — clean scrub (respects DTW warp) for row clicks.
-- [x] **Wiring** (`src/ui/app.ts`, `index.html`, `style.css`) — record each scored
-      frame; emit the report on run end; clear on any reset.
-- [x] **Verified** — deterministic `verifyReport()` in `demo/verify.mjs` (segment +
-      rank + directional coaching + empty-input safety) **and** browser scenario A
-      (report shown after the run, per-segment rows, directional correction text,
-      reset hides it). Validated against `reference.mp4`/`test.mp4`; same module is
-      quality-tier agnostic (`swan-lake-{hq,mq,lq}` use the identical path).
-- Decisions (self-grilled, AUTO mode): fixed time windows over audio beat/onset for
-  v1 (no audio decode today); error in bone-direction **degrees** (amplitude-
-  normalized, so fast segments aren't over-penalized); coaching from signed delta
-  on the worst bone → screen-relative raise/lower/left/right + torso lean/level.
+## v0.5 — AI coaching insights (#15)
+- [x] **Model-agnostic insights layer** — `src/insights/`:
+      - [x] `types.ts` — `CoachingInput` (segments + per-limb degrees + signed
+            direction + score series + top-N opportunities) + `CoachingProvider`
+            (`generateCoaching(report)`) pluggable interface.
+      - [x] `report.ts` — `RunReport` aggregator that compiles the structured
+            report from the existing per-frame score + per-limb divergence:
+            angular error in **degrees** (bone vectors) and a **signed**
+            correction direction (mean keypoint offset), segmented over time with
+            top-3 opportunities. (This is #9's "rule-based report", which did not
+            actually exist in-tree yet — built here.)
+      - [x] `prompt.ts` — dance-coach system prompt + compact report serializer.
+      - [x] `ruleBased.ts` — deterministic offline coaching (the fallback) +
+            provider wrapper.
+      - [x] `ollama.ts` — local Ollama provider (`/api/chat`, NDJSON streaming),
+            recommended default; availability-probes `/api/tags`.
+      - [x] `claude.ts` — **opt-in** remote provider via a user-configured thin
+            proxy (key stays server-side); default model `claude-opus-4-8`;
+            SSE/JSON/text responses.
+      - [x] `markdown.ts` — tiny zero-dependency Markdown → HTML (escapes first).
+      - [x] `storage.ts` — safe localStorage accessor (no-op off-browser).
+      - [x] `index.ts` — provider registry + `generateCoaching()` dispatcher with
+            **Auto** (local-if-available) and **clean fallback** to rule-based on
+            unavailability/error.
+- [x] **UI** — `index.html` "✨ AI coaching" panel (provider select + contextual
+      Ollama-model / Claude-proxy-URL inputs, persisted in localStorage) +
+      coaching panel; `src/ui/app.ts` feeds the `RunReport` each scored frame,
+      streams tokens into the panel, renders Markdown, and surfaces the provider
+      / fallback note. Privacy-preserving: only derived stats leave the page, and
+      only on the opt-in remote path.
+- [x] **Tests** — `npm test` (`test/insights.test.ts`, runs real TS via a tiny
+      `--import` resolver hook): report aggregation, rule-based output, Markdown,
+      and dispatcher fallback (23 assertions). `demo/verify.mjs` scenario A also
+      asserts the offline coaching panel renders Markdown end-to-end in Chrome.
+- [x] `npm run typecheck` + `npm run build` green.
 
 ## Backlog — next loop
-- [ ] Music-aware segmentation: real beat/onset detection vs fixed time windows (#9 follow-up)
-- [ ] Report: extension cues ("fully extend the knee") from joint-angle magnitude, not just direction (#9 follow-up)
 - [ ] Trim/scrub the exported clip range before saving (currently whole routine)
 - [ ] Score history: mark the worst moments / scrub to them
 - [ ] Per-rep segmentation (detect repeats in the routine)
