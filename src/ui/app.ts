@@ -13,6 +13,8 @@ import {
   syncCanvasToVideo,
 } from "../render/skeleton";
 import { ScoreGraph } from "../render/scoreGraph";
+import { RunRecorder, formatTime } from "../pose/report";
+import { ReportPanel } from "../render/reportPanel";
 import { drawComposite, sizeComposite } from "../render/composite";
 import {
   ComparisonRecorder,
@@ -62,6 +64,7 @@ interface Dom {
   strictnessReadout: HTMLElement;
   status: HTMLElement;
   breakdownRows: HTMLElement;
+  reportBody: HTMLElement;
 }
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -100,6 +103,7 @@ export function initApp(): void {
     strictnessReadout: byId("strictness-readout"),
     status: byId("status"),
     breakdownRows: byId("breakdown-rows"),
+    reportBody: byId("report-body"),
   };
 
   const detector = new PoseDetector(
@@ -108,6 +112,8 @@ export function initApp(): void {
   const tracker = new ScoreTracker(0.3);
   const limbTracker = new LimbDivergenceTracker(0.3);
   const scoreGraph = new ScoreGraph(dom.scoreHistory);
+  const runRecorder = new RunRecorder();
+  const reportPanel = new ReportPanel(dom.reportBody);
   const streamAligner = new StreamingAligner();
   // Offscreen canvas the recorder captures; composited each frame while active.
   const exportCanvas = document.createElement("canvas");
@@ -118,6 +124,9 @@ export function initApp(): void {
     tracker.reset();
     scoreGraph.reset();
     streamAligner.reset();
+    // A new run invalidates the accumulated improvement report.
+    runRecorder.reset();
+    reportPanel.clear();
     lastScored = null;
     setScoreUi(null, null);
     setLagUi(null);
@@ -461,10 +470,24 @@ export function initApp(): void {
           ? "Playback finished."
           : `Finished — average similarity ${avg.toFixed(1)}/100 over ${tracker.samples} frames.`,
       );
+      // Emit the post-run improvement report from the accumulated series.
+      showReport();
       // If we were recording, finalize and download the clip now.
       void finishRecording();
     },
   });
+
+  // Build the improvement report from the recorded series and render it, wiring
+  // each row to seek both clips to that segment for side-by-side review.
+  const showReport = () => {
+    const report = runRecorder.build();
+    reportPanel.render(report, {
+      onSeek: (startSec) => {
+        player.seek(startSec);
+        setStatus(`Jumped to ${formatTime(startSec)} — review this segment side by side.`);
+      },
+    });
+  };
 
   async function processFrame(): Promise<void> {
     if (frameBusy || !modelReady) return;
@@ -510,6 +533,9 @@ export function initApp(): void {
             }
           }
           limbTracker.push(perJointDivergence(refForScore, testNorm));
+          // Accumulate the per-bone error series for the post-run report,
+          // keyed on the reference (aligned) timeline.
+          runRecorder.push(dom.refVideo.currentTime, refForScore, testNorm);
           const worst = limbTracker.worst();
           renderBreakdown(limbTracker.smoothed(), worst?.key);
           if (worst && worst.distance !== null && worst.distance > HIGHLIGHT_MIN) {

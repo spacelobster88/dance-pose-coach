@@ -64,7 +64,31 @@
       end, works for file + webcam. Verified (scenario C): downloads a valid
       1280×596 webm with real frames.
 
+## dance-pose-coach v0.5 — post-run improvement report (#9)
+- [x] **`src/pose/report.ts`** — `RunRecorder` accumulates per-bone reference-vs-test
+      unit-direction vectors against the aligned reference timeline; `buildReport`
+      buckets into fixed time windows (default 3s), ranks limbs per segment by mean
+      bone-direction error (degrees), and surfaces the run-wide top-N limb×segment
+      opportunities. `correctionFor` turns the *signed* averaged bone delta into a
+      directional fix ("Raise your left elbow…", "Level your shoulders").
+- [x] **`src/render/reportPanel.ts`** — renders "Biggest opportunities" + a
+      segment-by-segment table; each row seeks both videos to that moment.
+- [x] **`DualPlayer.seek(refTime)`** — clean scrub (respects DTW warp) for row clicks.
+- [x] **Wiring** (`src/ui/app.ts`, `index.html`, `style.css`) — record each scored
+      frame; emit the report on run end; clear on any reset.
+- [x] **Verified** — deterministic `verifyReport()` in `demo/verify.mjs` (segment +
+      rank + directional coaching + empty-input safety) **and** browser scenario A
+      (report shown after the run, per-segment rows, directional correction text,
+      reset hides it). Validated against `reference.mp4`/`test.mp4`; same module is
+      quality-tier agnostic (`swan-lake-{hq,mq,lq}` use the identical path).
+- Decisions (self-grilled, AUTO mode): fixed time windows over audio beat/onset for
+  v1 (no audio decode today); error in bone-direction **degrees** (amplitude-
+  normalized, so fast segments aren't over-penalized); coaching from signed delta
+  on the worst bone → screen-relative raise/lower/left/right + torso lean/level.
+
 ## Backlog — next loop
+- [ ] Music-aware segmentation: real beat/onset detection vs fixed time windows (#9 follow-up)
+- [ ] Report: extension cues ("fully extend the knee") from joint-angle magnitude, not just direction (#9 follow-up)
 - [ ] Trim/scrub the exported clip range before saving (currently whole routine)
 - [ ] Score history: mark the worst moments / scrub to them
 - [ ] Per-rep segmentation (detect repeats in the routine)

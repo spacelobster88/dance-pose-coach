@@ -550,6 +550,92 @@ function verifyStreaming() {
   }
 }
 
+// ---- Improvement report: segmentation + ranking + coaching (deterministic) ----
+// Issue #9: after a run, report.ts buckets the aligned per-bone error series into
+// time segments, ranks the worst limb per segment, surfaces the run-wide top-N
+// limb×segment opportunities, and turns each into a *directional* correction.
+// We drive the REAL module (RunRecorder + buildReport from src/pose/report.ts)
+// via `npx tsx` on synthetic poses, mirroring the other deterministic checks:
+//   (a) a segment where the left arm droops is flagged with the LEFT ARM worst
+//       and a "raise the left elbow" correction (sign of the error → direction);
+//   (b) a well-matched segment flags nothing;
+//   (c) the run-wide top opportunity points at the bad limb×segment with a time
+//       label; (d) empty input yields a safe empty report; (e) m:ss formatting.
+// A regression here FAILS `npm run verify`, independent of any browser flake.
+const REPORT_SCRIPT = `
+import { RunRecorder, buildReport, formatTime } from "../../src/pose/report.ts";
+
+const I = {
+  left_shoulder:5,right_shoulder:6,left_elbow:7,right_elbow:8,left_wrist:9,
+  right_wrist:10,left_hip:11,right_hip:12,left_knee:13,right_knee:14,
+  left_ankle:15,right_ankle:16,
+};
+const P=(x,y)=>({x,y,valid:true});
+// A full 17-point normalized pose. leftElbowDrop pushes the left elbow/wrist
+// DOWN (image +y), i.e. the left arm hangs lower than the reference.
+function pose({leftElbowDrop=0}={}) {
+  const pts=Array.from({length:17},()=>({x:0,y:0,valid:false}));
+  pts[I.left_shoulder]=P(-0.4,-1.0); pts[I.right_shoulder]=P(0.4,-1.0);
+  pts[I.left_hip]=P(-0.3,0); pts[I.right_hip]=P(0.3,0);
+  pts[I.left_knee]=P(-0.3,1); pts[I.right_knee]=P(0.3,1);
+  pts[I.left_ankle]=P(-0.3,2); pts[I.right_ankle]=P(0.3,2);
+  pts[I.right_elbow]=P(1.0,-1.0); pts[I.right_wrist]=P(1.6,-1.0);
+  pts[I.left_elbow]=P(-1.0,-1.0+leftElbowDrop); pts[I.left_wrist]=P(-1.6,-1.0+leftElbowDrop);
+  return {points:pts};
+}
+
+const ref = pose();
+const good = pose();                       // matches ref
+const bad = pose({leftElbowDrop:1.2});     // left arm drooping low
+
+const rec=new RunRecorder();
+for(let t=0;t<3;t+=0.5) rec.push(t, ref, good);   // segment 1: good
+for(let t=3;t<6;t+=0.5) rec.push(t, ref, bad);    // segment 2: left arm low
+
+const report=rec.build({segmentSec:3, topN:5});
+const fail=[];
+const emit=(c,l,d)=>{ console.log(\`REPORT|\${c?"PASS":"FAIL"}|\${l}|\${d??""}\`); if(!c)fail.push(l); };
+
+emit(report.frameCount===12,"recorded all analysed frames",\`n=\${report.frameCount}\`);
+emit(report.segments.length===2,"timeline split into 2 fixed segments",\`segs=\${report.segments.length}\`);
+emit(formatTime(42)==="0:42"&&formatTime(75)==="1:15","m:ss time labels",\`\${formatTime(42)},\${formatTime(75)}\`);
+
+const seg2=report.segments[1];
+emit(!!seg2.worst && seg2.worst.limbKey==="left_arm","worst limb in bad segment is the LEFT ARM",seg2.worst&&seg2.worst.limbKey);
+emit(!!seg2.worst && seg2.worst.meanErrorDeg>10,"bad segment carries a substantial numeric error (>10deg)",seg2.worst&&seg2.worst.meanErrorDeg.toFixed(1));
+emit(!!seg2.worst && /raise/i.test(seg2.worst.correction),"correction is directional (RAISE)",seg2.worst&&seg2.worst.correction);
+emit(!!seg2.worst && /left elbow/i.test(seg2.worst.correction),"correction names the joint (left elbow)",seg2.worst&&seg2.worst.correction);
+
+const seg1=report.segments[0];
+emit(!seg1.worst,"well-matched segment flags nothing",String(seg1.worst));
+
+const top=report.topOpportunities;
+emit(top.length>=1 && top[0].limbKey==="left_arm" && top[0].segmentIndex===1,
+  "run-wide top opportunity is left arm in the bad segment",top.length?\`\${top[0].limbKey}@\${top[0].segmentIndex}\`:"none");
+emit(top.length>=1 && top[0].label===seg2.label,"opportunity carries its time label",top.length?top[0].label:"none");
+
+const empty=buildReport([]);
+emit(empty.frameCount===0 && empty.segments.length===0 && empty.topOpportunities.length===0,
+  "empty input -> safe empty report");
+
+process.exit(fail.length?1:0);
+`;
+
+function verifyReport() {
+  log("=== Improvement report: segment + rank + coaching (deterministic) ===");
+  const scriptPath = resolve(OUT, "report-check.mjs");
+  writeFileSync(scriptPath, REPORT_SCRIPT);
+  const r = spawnSync("npx", ["tsx", scriptPath], { cwd: ROOT, encoding: "utf8" });
+  const out = `${r.stdout || ""}${r.stderr || ""}`;
+  for (const line of out.split("\n")) {
+    const m = line.match(/^REPORT\|(PASS|FAIL)\|([^|]*)\|(.*)$/);
+    if (m) check(m[1] === "PASS", `report: ${m[2]}`, m[3] || undefined);
+  }
+  if (!/^REPORT\|/m.test(out)) {
+    check(false, "report: check script ran", `tsx exit ${r.status}: ${out.trim().slice(0, 300)}`);
+  }
+}
+
 // ---- Bundle cleanliness: model weights load from CDN, not bundled ----
 // Issue B requires BlazePose weights to stream from cdn.jsdelivr.net at runtime,
 // so the built bundle must contain NO model-weight files (*.tflite, *.binarypb,
@@ -673,8 +759,47 @@ async function verifyFileMode() {
       });
     }
 
+    // Issue #9: playing to the end emits the post-run improvement report.
+    // Jump near the end so the reference 'ended' event fires quickly, then play.
+    await page.evaluate(() => {
+      const v = document.getElementById("ref-video");
+      if (isFinite(v.duration) && v.duration > 0) {
+        v.currentTime = Math.max(0, v.duration - 0.3);
+      }
+    });
+    if (await page.$eval("#play-btn", (e) => /play/i.test(e.textContent))) {
+      await page.click("#play-btn");
+    }
+    await page.waitForFunction(
+      () => {
+        const r = document.getElementById("report");
+        return r && !r.hidden && r.querySelectorAll(".rp-trow").length > 1;
+      },
+      null,
+      { timeout: 20000 },
+    );
+    const reportInfo = await page.evaluate(() => {
+      const r = document.getElementById("report");
+      const firstFix = r?.querySelector(".rp-opp .rp-fix, .rp-table .rp-trow:not(.rp-thead) .rp-c-fix");
+      return {
+        visible: !!r && !r.hidden,
+        opps: r ? r.querySelectorAll(".rp-opp").length : 0,
+        rows: r ? r.querySelectorAll(".rp-table .rp-trow:not(.rp-thead)").length : 0,
+        fix: firstFix ? firstFix.textContent.trim() : "",
+      };
+    });
+    check(reportInfo.visible, "A: improvement report shown after the run ends");
+    check(reportInfo.rows >= 1, "A: report lists per-segment rows", `${reportInfo.rows} segment rows`);
+    check(
+      /raise|lower|level|straighten|bring|square|lengthen/i.test(reportInfo.fix),
+      "A: report row states a concrete directional correction",
+      reportInfo.fix ? `"${reportInfo.fix}"` : "no correction text",
+    );
+
     await page.click("#restart-btn");
     await page.waitForTimeout(300);
+    const reportCleared = await page.$eval("#report", (e) => e.hidden);
+    check(reportCleared, "A: reset hides the improvement report");
     const afterReset = await page.evaluate(() => {
       const c = document.getElementById("score-history");
       const ctx = c.getContext("2d");
@@ -871,6 +996,7 @@ async function main() {
     verify3D();
     verifySyncCalib();
     verifyStreaming();
+    verifyReport();
     verifyBundleCleanliness();
     await verifyFileMode();
     await verifyWebcamStreaming();
