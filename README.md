@@ -12,7 +12,9 @@ the browser via TensorFlow.js.
 > **streaming DTW for the webcam**, and **export of a scored comparison clip**
 > (issues [#4](../../issues/4)–[#6](../../issues/6)). **v0.4** reworks the core:
 > **viewpoint-robust strict scoring**, **3D Procrustes alignment**, and
-> **sync-calibrated adaptive lag**. See [`tasks/todo.md`](tasks/todo.md).
+> **sync-calibrated adaptive lag**. **v0.5** adds a **post-run improvement report**
+> — which limb, around which time segment, how far off, and how to fix it
+> ([#9](../../issues/9)). See [`tasks/todo.md`](tasks/todo.md).
 
 ![dance-pose-coach demo](demo/dance-pose-coach-demo.gif)
 
@@ -79,22 +81,39 @@ The original score was a cosine similarity over normalized **2D** coordinates,
 which floored around ~75 for any upright human and stayed near 100 even for
 visibly wrong poses. v0.4 reworks the comparison core:
 
-13. **Strict joint-angle scoring** — `src/pose/similarity.ts` +
+15. **Strict joint-angle scoring** — `src/pose/similarity.ts` +
     `src/pose/boneAngles.ts`: similarity is now computed over **bone vectors /
     joint angles** and passed through an **exponential-decay curve** keyed to the
     mean joint error, so "very different" actually scores low. A **strictness
     slider** tunes how punishing the curve is (backward-compatible default).
-14. **3D Procrustes alignment** — `src/pose/procrustes.ts` +
+16. **3D Procrustes alignment** — `src/pose/procrustes.ts` +
     `src/pose/detector.ts`: the detector can use **MediaPipe BlazePose GHUM**'s
     3D world landmarks, and the two poses are **Procrustes-aligned** into a
     shared, viewpoint-independent 3D canonical frame before scoring — so a
     different camera angle no longer corrupts the comparison.
-15. **Sync-calibrated adaptive lag** — `src/pose/syncCalib.ts` +
+17. **Sync-calibrated adaptive lag** — `src/pose/syncCalib.ts` +
     `src/pose/streamDtw.ts`: a one-time **countdown/clap calibration** estimates
     end-to-end **transport delay** separately from human reaction lag, and the
     streaming aligner adapts its `maxLagMs` from that estimate instead of a fixed
     cap. (Real clap-audio onset detection and true lens de-distortion are noted
     as optional follow-ups in [`tasks/todo.md`](tasks/todo.md).)
+
+## v0.5 — post-run improvement report
+
+The live score and per-limb bars say how you're doing *now*; they don't tell you
+what to practise once the music stops. v0.5 turns the run into actionable notes:
+
+18. **Improvement report** — `src/pose/report.ts` + `src/render/reportPanel.ts`:
+    every analysed frame's per-bone error is recorded against the aligned
+    reference timeline, bucketed into fixed **time segments**, and ranked so each
+    segment names its **worst limb** with a **numeric error (degrees)**. A
+    run-wide **"Biggest opportunities"** list surfaces the top limb×segment pairs.
+    Each row states a **concrete, directional fix** ("Raise your left elbow —
+    it's ~25° too low", "Level your shoulders") derived from the *signed*
+    bone-direction delta, and **clicking a row seeks both videos** to that moment
+    for side-by-side review. The error is a bone-*direction* angle, so a fast,
+    big-movement segment isn't penalized over a slow held pose. Segmentation is
+    fixed time windows for v1 (audio beat/onset detection is a noted follow-up).
 
 ## Quick start
 
@@ -164,10 +183,12 @@ src/
     dtw.ts          # banded DTW alignment over pose sequences (#2)
     streamDtw.ts    # streaming lag-compensated aligner for webcam (#5)
     perJoint.ts     # per-limb divergence + worst-limb tracking (#3)
+    report.ts       # post-run improvement report: segment + rank + coach (#9)
     tracker.ts      # multi-person id tracking + single-target lock (#8)
     keypoints.ts    # COCO-17 names, skeleton edges, types
   render/
     skeleton.ts     # Canvas skeleton drawing (+ limb highlight)
+    reportPanel.ts  # ranked report table + seek-on-click (#9)
   video/
     dualPlayer.ts    # synchronized two-video playback + frame pump (+ warp/live)
     sampler.ts       # offline pose sampling + warp builder for DTW (#2)
