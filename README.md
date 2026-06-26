@@ -63,6 +63,17 @@ the browser via TensorFlow.js.
 12. **Export a scored comparison clip** (#6) — **Export clip** records the
     side-by-side comparison (both skeletons + a score banner) entirely in the
     browser via `MediaRecorder` and downloads it as a `.webm` — no server.
+13. **Export format MP4 / WebM** (#7) — a format picker beside **Export clip**
+    chooses the container (default MP4, H.264; WebM uses VP9/VP8). Browsers that
+    can't record MP4 (e.g. Firefox) fall back to WebM and say so, and the
+    filename matches the container actually written.
+14. **Multi-person video + dancer tracking** (#8) — a **People** toggle switches
+    between *single-person* (the fast single-pose path) and *multi-person* mode,
+    which runs MoveNet MultiPose and a light tracker (`pose/tracker.ts`) so the
+    skeleton and score follow ONE dancer instead of flickering between bodies in
+    a crowded frame. Click a body in **Your attempt** to lock onto it; the lock
+    holds through brief occlusions/crossings and re-acquires the same person
+    rather than snapping to a stranger. Only a fresh, locked match is scored.
 
 ## v0.4 — viewpoint-robust strict scoring
 
@@ -70,17 +81,17 @@ The original score was a cosine similarity over normalized **2D** coordinates,
 which floored around ~75 for any upright human and stayed near 100 even for
 visibly wrong poses. v0.4 reworks the comparison core:
 
-13. **Strict joint-angle scoring** — `src/pose/similarity.ts` +
+15. **Strict joint-angle scoring** — `src/pose/similarity.ts` +
     `src/pose/boneAngles.ts`: similarity is now computed over **bone vectors /
     joint angles** and passed through an **exponential-decay curve** keyed to the
     mean joint error, so "very different" actually scores low. A **strictness
     slider** tunes how punishing the curve is (backward-compatible default).
-14. **3D Procrustes alignment** — `src/pose/procrustes.ts` +
+16. **3D Procrustes alignment** — `src/pose/procrustes.ts` +
     `src/pose/detector.ts`: the detector can use **MediaPipe BlazePose GHUM**'s
     3D world landmarks, and the two poses are **Procrustes-aligned** into a
     shared, viewpoint-independent 3D canonical frame before scoring — so a
     different camera angle no longer corrupts the comparison.
-15. **Sync-calibrated adaptive lag** — `src/pose/syncCalib.ts` +
+17. **Sync-calibrated adaptive lag** — `src/pose/syncCalib.ts` +
     `src/pose/streamDtw.ts`: a one-time **countdown/clap calibration** estimates
     end-to-end **transport delay** separately from human reaction lag, and the
     streaming aligner adapts its `maxLagMs` from that estimate instead of a fixed
@@ -92,7 +103,7 @@ visibly wrong poses. v0.4 reworks the comparison core:
 The live score and per-limb bars say how you're doing *now*; they don't tell you
 what to practise once the music stops. v0.5 turns the run into actionable notes:
 
-16. **Improvement report** — `src/pose/report.ts` + `src/render/reportPanel.ts`:
+18. **Improvement report** — `src/pose/report.ts` + `src/render/reportPanel.ts`:
     every analysed frame's per-bone error is recorded against the aligned
     reference timeline, bucketed into fixed **time segments**, and ranked so each
     segment names its **worst limb** with a **numeric error (degrees)**. A
@@ -173,6 +184,7 @@ src/
     streamDtw.ts    # streaming lag-compensated aligner for webcam (#5)
     perJoint.ts     # per-limb divergence + worst-limb tracking (#3)
     report.ts       # post-run improvement report: segment + rank + coach (#9)
+    tracker.ts      # multi-person id tracking + single-target lock (#8)
     keypoints.ts    # COCO-17 names, skeleton edges, types
   render/
     skeleton.ts     # Canvas skeleton drawing (+ limb highlight)

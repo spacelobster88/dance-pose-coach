@@ -636,6 +636,171 @@ function verifyReport() {
   }
 }
 
+// ---- Multi-person tracker + target lock (deterministic, no browser) ----
+// Issue #8: multi-person clips need stable identity so the skeleton (and score)
+// follows ONE dancer instead of flickering between bodies. Headless swiftshader
+// can't load MoveNet MultiPose reliably, so — mirroring the other deterministic
+// checks — we exercise the REAL tracker (src/pose/tracker.ts) via `npx tsx` on
+// synthetic multi-person frames:
+//   (a) two people moving apart keep their ids stable across frames;
+//   (b) TargetLock holds onto its dancer through a multi-frame occlusion and
+//       re-acquires the SAME id when they reappear — never snaps to the other;
+//   (c) the single-pose "stick" guard: when the detector flips to a far-away
+//       body, the lock coasts (fresh=false) instead of jumping to it;
+//   (d) auto-pick selects the largest / most-central person;
+//   (e) empty input is safe.
+// A regression here FAILS `npm run verify`, independent of any browser flake.
+const TRACKER_SCRIPT = `
+import { PoseTracker, TargetLock, poseBBox, bboxIoU } from "../../src/pose/tracker.ts";
+
+// Build a full 17-point COCO pose for a "person" standing at center (cx,cy) with
+// a given scale, all keypoints confident. Index order per src/pose/keypoints.ts.
+function person(cx, cy, scale = 100) {
+  const s = scale;
+  const pts = Array.from({ length: 17 }, () => ({ x: 0, y: 0, score: 0.0 }));
+  const set = (i, dx, dy) => { pts[i] = { x: cx + dx * s, y: cy + dy * s, score: 0.9 }; };
+  set(0, 0, -1.0);   // nose
+  set(1, -0.1, -1.05); set(2, 0.1, -1.05); // eyes
+  set(3, -0.2, -1.0);  set(4, 0.2, -1.0);  // ears
+  set(5, -0.3, -0.6);  set(6, 0.3, -0.6);  // shoulders
+  set(7, -0.45, -0.2); set(8, 0.45, -0.2); // elbows
+  set(9, -0.5, 0.2);   set(10, 0.5, 0.2);  // wrists
+  set(11, -0.2, 0.0);  set(12, 0.2, 0.0);  // hips
+  set(13, -0.2, 0.6);  set(14, 0.2, 0.6);  // knees
+  set(15, -0.2, 1.2);  set(16, 0.2, 1.2);  // ankles
+  return { keypoints: pts, score: 0.9 };
+}
+
+const fail = [];
+const emit = (cond, label, detail) => {
+  console.log(\`TRACK|\${cond ? "PASS" : "FAIL"}|\${label}|\${detail ?? ""}\`);
+  if (!cond) fail.push(label);
+};
+
+// (a) Two people drifting apart keep stable ids across frames.
+{
+  const tracker = new PoseTracker();
+  const idsA = [], idsB = [];
+  for (let f = 0; f < 12; f++) {
+    const A = person(300 - f * 8, 400);   // drifts left
+    const B = person(900 + f * 8, 400);   // drifts right
+    // Feed in a deliberately SWAPPED order each frame to prove identity comes
+    // from matching, not input order.
+    const tracked = tracker.update(f % 2 ? [B, A] : [A, B]);
+    const a = tracked.find((t) => t.bbox.minX < 600);
+    const b = tracked.find((t) => t.bbox.minX >= 600);
+    if (a) idsA.push(a.id);
+    if (b) idsB.push(b.id);
+  }
+  const stableA = idsA.length === 12 && idsA.every((x) => x === idsA[0]);
+  const stableB = idsB.length === 12 && idsB.every((x) => x === idsB[0]);
+  emit(stableA, "id of person A is stable across 12 frames", \`ids=\${[...new Set(idsA)].join(",")}\`);
+  emit(stableB, "id of person B is stable across 12 frames", \`ids=\${[...new Set(idsB)].join(",")}\`);
+  emit(idsA[0] !== idsB[0], "the two people get distinct ids", \`A=\${idsA[0]} B=\${idsB[0]}\`);
+}
+
+// (b) Target lock survives a multi-frame occlusion and re-acquires the SAME id.
+{
+  const tracker = new PoseTracker();
+  const lock = new TargetLock();
+  const frame = { width: 1280, height: 720 };
+  // Lock onto the LEFT dancer (A) explicitly via a click on their torso.
+  let lockedId = null;
+  const statuses = [];
+  for (let f = 0; f < 14; f++) {
+    const A = person(350, 400);
+    const B = person(900, 400);
+    // A is occluded (absent) for frames 5..8.
+    const occluded = f >= 5 && f <= 8;
+    const dets = occluded ? [B] : [A, B];
+    const tracked = tracker.update(dets);
+    const click = f === 0 ? { x: 350, y: 400 } : null;
+    const sel = lock.select(tracked, { autoPick: true, frame, click });
+    if (f === 0) lockedId = sel.id;
+    statuses.push(sel);
+  }
+  emit(lockedId !== null, "lock acquired the clicked (left) dancer", \`id=\${lockedId}\`);
+  // During occlusion the lock coasts (not fresh) and never reports B's pose.
+  const occ = statuses.slice(5, 9);
+  emit(occ.every((s) => s.fresh === false), "lock coasts (fresh=false) through the occlusion", \`fresh=\${occ.map((s) => s.fresh).join(",")}\`);
+  emit(occ.every((s) => s.id === lockedId), "lock keeps the SAME id while coasting", \`ids=\${[...new Set(occ.map((s) => s.id))].join(",")}\`);
+  // After reappearing, the lock is fresh again and on the same identity.
+  const after = statuses[10];
+  emit(after.fresh === true && after.id === lockedId, "lock re-acquires the SAME dancer after occlusion", \`fresh=\${after.fresh} id=\${after.id}\`);
+  // And it never switched to B: B's id differs from the locked id throughout.
+  const everB = statuses.some((s) => s.fresh && s.id !== lockedId);
+  emit(!everB, "lock never snapped to the other dancer", \`switched=\${everB}\`);
+}
+
+// (c) Single-pose "stick" guard: a stream of ONE pose that abruptly jumps to a
+// far-away body must NOT drag the lock along — it coasts instead.
+{
+  const tracker = new PoseTracker();
+  const lock = new TargetLock();
+  const frame = { width: 1280, height: 720 };
+  const seq = [];
+  for (let f = 0; f < 8; f++) {
+    // Frames 0..3: dancer at left. Frame 4: detector flips to a far RIGHT body.
+    // Frames 5..7: original dancer is back at the left.
+    const pose = f === 4 ? person(1100, 400) : person(300, 400);
+    const tracked = tracker.update([pose]);
+    const sel = lock.select(tracked, { autoPick: true, frame });
+    seq.push(sel);
+  }
+  const lockedId = seq[0].id;
+  emit(seq[4].fresh === false, "single-pose jump to a far body does NOT become a fresh match", \`fresh=\${seq[4].fresh}\`);
+  emit(seq[4].id === lockedId, "lock holds its original id during the jump", \`id=\${seq[4].id} locked=\${lockedId}\`);
+  emit(seq[5].fresh === true && seq[5].id === lockedId, "lock resumes the original dancer once they return", \`fresh=\${seq[5].fresh} id=\${seq[5].id}\`);
+}
+
+// (d) Auto-pick selects the largest / most-central person.
+{
+  const tracker = new PoseTracker();
+  const lock = new TargetLock();
+  const frame = { width: 1280, height: 720 };
+  const small = person(150, 200, 50);    // small, off to the corner
+  const big = person(640, 360, 140);     // large, dead center
+  const tracked = tracker.update([small, big]);
+  const sel = lock.select(tracked, { autoPick: true, frame });
+  const bigId = tracked.slice().sort((a, b) => (b.bbox.maxX - b.bbox.minX) - (a.bbox.maxX - a.bbox.minX))[0]?.id;
+  emit(sel.id === bigId, "auto-pick chose the largest / most-central dancer", \`picked=\${sel.id} big=\${bigId}\`);
+}
+
+// (e) Empty input is safe.
+{
+  const tracker = new PoseTracker();
+  const lock = new TargetLock();
+  const tracked = tracker.update([]);
+  const sel = lock.select(tracked, { autoPick: true });
+  emit(Array.isArray(tracked) && tracked.length === 0, "empty frame -> no tracks", \`n=\${tracked.length}\`);
+  emit(sel.pose === null && sel.fresh === false && sel.status === "searching", "empty frame -> lock is searching, no pose", \`status=\${sel.status}\`);
+}
+
+// Sanity: helpers behave (bbox over confident keypoints; IoU of identical box=1).
+{
+  const box = poseBBox(person(500, 500));
+  emit(box !== null && box.maxX > box.minX && box.maxY > box.minY, "poseBBox returns a real box", box ? \`\${(box.maxX - box.minX).toFixed(0)}x\${(box.maxY - box.minY).toFixed(0)}\` : "null");
+  emit(box !== null && Math.abs(bboxIoU(box, box) - 1) < 1e-9, "IoU of a box with itself is 1", box ? \`iou=\${bboxIoU(box, box).toFixed(3)}\` : "null");
+}
+
+process.exit(fail.length ? 1 : 0);
+`;
+
+function verifyTracker() {
+  log("=== Multi-person tracker + target lock (deterministic) ===");
+  const scriptPath = resolve(OUT, "tracker-check.mjs");
+  writeFileSync(scriptPath, TRACKER_SCRIPT);
+  const r = spawnSync("npx", ["tsx", scriptPath], { cwd: ROOT, encoding: "utf8" });
+  const out = `${r.stdout || ""}${r.stderr || ""}`;
+  for (const line of out.split("\n")) {
+    const m = line.match(/^TRACK\|(PASS|FAIL)\|([^|]*)\|(.*)$/);
+    if (m) check(m[1] === "PASS", `tracker: ${m[2]}`, m[3] || undefined);
+  }
+  if (!/^TRACK\|/m.test(out)) {
+    check(false, "tracker: check script ran", `tsx exit ${r.status}: ${out.trim().slice(0, 300)}`);
+  }
+}
+
 // ---- Bundle cleanliness: model weights load from CDN, not bundled ----
 // Issue B requires BlazePose weights to stream from cdn.jsdelivr.net at runtime,
 // so the built bundle must contain NO model-weight files (*.tflite, *.binarypb,
@@ -997,6 +1162,7 @@ async function main() {
     verifySyncCalib();
     verifyStreaming();
     verifyReport();
+    verifyTracker();
     verifyBundleCleanliness();
     await verifyFileMode();
     await verifyWebcamStreaming();
