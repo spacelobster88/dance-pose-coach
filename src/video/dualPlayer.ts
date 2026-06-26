@@ -141,6 +141,21 @@ export class DualPlayer {
   }
 
   /**
+   * Seek the reference to `refTime` (seconds), bring the test clip to its
+   * matched position (respecting any DTW warp), and render one frame. Pauses
+   * first so the seek is a clean scrub — used by the post-run report to jump
+   * both videos to a segment for side-by-side review.
+   */
+  seek(refTime: number): void {
+    this.pause();
+    const rDur = this.ref.duration;
+    const t = isFinite(rDur) && rDur > 0 ? Math.max(0, Math.min(rDur, refTime)) : Math.max(0, refTime);
+    this.ref.currentTime = t;
+    this.syncTestToRef(true);
+    this.renderOnce();
+  }
+
+  /**
    * Map the reference's playback progress (0..1) onto the test clip's duration
    * and seek the test clip there if it has drifted. When `force` is true the
    * seek happens regardless of drift (used before play / for scrubbing).

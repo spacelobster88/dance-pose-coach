@@ -53,6 +53,31 @@ function isBlazePose(v: ModelVariant): boolean {
   return v === "blazepose";
 }
 
+/** Map a raw detector pose into our COCO-17 `Pose` (2D, plus 3D when present). */
+function toPose(p: poseDetection.Pose): Pose {
+  const pose: Pose = {
+    keypoints: p.keypoints.map((k) => ({
+      x: k.x,
+      y: k.y,
+      z: k.z ?? undefined,
+      score: k.score ?? undefined,
+      name: k.name,
+    })),
+    score: p.score ?? undefined,
+  };
+  // 3D world landmarks are only present on the BlazePose path.
+  if (p.keypoints3D && p.keypoints3D.length) {
+    pose.worldKeypoints = p.keypoints3D.map((k) => ({
+      x: k.x,
+      y: k.y,
+      z: k.z ?? undefined,
+      score: k.score ?? undefined,
+      name: k.name,
+    }));
+  }
+  return pose;
+}
+
 /**
  * Thin wrapper around single-pose detection.
  *
@@ -70,6 +95,11 @@ export class PoseDetector {
   // allocate a fresh canvas (and its backing memory) every frame.
   private scratch: HTMLCanvasElement | null = null;
   private scratchCtx: CanvasRenderingContext2D | null = null;
+  // Multi-person path: a separate, lazily-loaded MoveNet MultiPose detector.
+  // Kept independent of the single-pose `detector` so the variant selector
+  // (lightning / thunder / 3D BlazePose) and its behavior are untouched.
+  private multiDetector: poseDetection.PoseDetector | null = null;
+  private multiLoading: Promise<void> | null = null;
 
   constructor(variant: ModelVariant = "lightning") {
     this.variant = variant;
@@ -231,8 +261,51 @@ export class PoseDetector {
     return pose;
   }
 
+  /**
+   * Lazily create the MoveNet MultiPose detector used by the multi-person mode.
+   * Idempotent and concurrency-safe (one in-flight load is shared).
+   */
+  async loadMulti(): Promise<void> {
+    if (this.multiDetector) return;
+    if (this.multiLoading) return this.multiLoading;
+    this.multiLoading = (async () => {
+      await this.ensureBackend();
+      this.multiDetector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+          modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
+          enableSmoothing: true,
+        },
+      );
+    })();
+    try {
+      await this.multiLoading;
+    } finally {
+      this.multiLoading = null;
+    }
+  }
+
+  /**
+   * Estimate up to `maxPoses` people from a source (MoveNet MultiPose). The
+   * returned poses are unordered and identity-free; the tracker assigns stable
+   * ids. Loads the multipose model on first use.
+   */
+  async estimateMany(
+    source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement,
+    maxPoses = 6,
+  ): Promise<Pose[]> {
+    await this.loadMulti();
+    const poses = await this.multiDetector!.estimatePoses(source, {
+      maxPoses,
+      flipHorizontal: false,
+    });
+    return poses.map(toPose);
+  }
+
   dispose(): void {
     this.detector?.dispose();
     this.detector = null;
+    this.multiDetector?.dispose();
+    this.multiDetector = null;
   }
 }
