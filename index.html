@@ -262,9 +262,24 @@
         </div>
         <div class="pane test">
           <h2 id="test-heading">Your attempt</h2>
-          <div class="video-wrap">
+          <div class="video-wrap" id="test-wrap">
             <video id="test-video" playsinline muted preload="auto"></video>
             <canvas id="test-canvas"></canvas>
+            <!-- Live multi-person lock UI: a status badge + a Re-lock button.
+                 Shown only in live-webcam multi mode; tap the feed to re-lock. -->
+            <div id="lock-overlay" class="lock-overlay" hidden>
+              <span id="lock-badge" class="lock-badge" aria-live="polite"
+                >Looking for a dancer…</span
+              >
+              <button
+                id="relock-btn"
+                class="lock-relock"
+                type="button"
+                title="Re-lock onto the most central dancer"
+              >
+                Re-lock
+              </button>
+            </div>
           </div>
         </div>
       </section>
