@@ -85,6 +85,29 @@ visibly wrong poses. v0.4 reworks the comparison core:
     cap. (Real clap-audio onset detection and true lens de-distortion are noted
     as optional follow-ups in [`tasks/todo.md`](tasks/todo.md).)
 
+## v0.5 — AI coaching insights (#15)
+
+The score and per-limb bars are numbers; **AI coaching** turns them into
+plain-language guidance. After a run, **✨ Coach me** builds a *compact, derived
+report* — per-segment limb errors in **degrees**, a **signed** correction for
+each (e.g. "lift and move screen-left"), the score timeline, and the top
+opportunities — and a coaching provider renders **prioritized, encouraging
+fixes + a practice drill** as streamed Markdown.
+
+16. **Model-agnostic insights layer** — `src/insights/`: a pluggable
+    `CoachingProvider` interface (`generateCoaching(report)`), a `RunReport`
+    aggregator that compiles the structured report from the existing scoring +
+    per-limb divergence, and a tiny zero-dependency Markdown renderer.
+17. **Three providers, privacy-first** — a **Local · Ollama** provider
+    (`http://localhost:11434`, streamed) keeps everything on-device; an
+    **offline rule-based** provider is the always-available fallback; and an
+    **opt-in Claude** provider (`claude-opus-4-8`) talks to a **thin proxy you
+    configure** (the API key lives in the proxy, never the client). Only derived
+    pose stats — never video — ever leave the page, and only for the remote path
+    you explicitly enable. **Auto** uses local-if-available, else the offline
+    report. A failed/unconfigured provider **falls back cleanly** to the
+    rule-based report so the action never dead-ends.
+
 ## Quick start
 
 ```bash
@@ -105,7 +128,21 @@ Then in the browser:
 ```bash
 npm run build    # type-checks then emits a static bundle to dist/
 npm run preview  # serve the built bundle locally
+npm test         # unit tests for the insights layer (report + providers)
 ```
+
+### AI coaching providers
+
+By default coaching uses **Auto** (local Ollama if reachable, else the offline
+rule-based report). To use a specific backend, pick it in the **✨ AI coaching**
+panel:
+
+- **Local · Ollama** — run `ollama serve` and pull a model (e.g.
+  `ollama pull llama3.1`); set the model name in the panel if it isn't the
+  default. Nothing leaves your machine.
+- **Remote · Claude (opt-in)** — stand up a small proxy that holds your
+  Anthropic key and accepts `POST { system, message, report, model }`, then
+  paste its URL in the panel. Only the derived report (never video) is sent.
 
 ## How scoring works
 
@@ -154,6 +191,14 @@ src/
     streamDtw.ts    # streaming lag-compensated aligner for webcam (#5)
     perJoint.ts     # per-limb divergence + worst-limb tracking (#3)
     keypoints.ts    # COCO-17 names, skeleton edges, types
+  insights/         # AI coaching: report → natural-language coaching (#15)
+    report.ts       # RunReport aggregator → compact CoachingInput (degrees/dir)
+    index.ts        # provider registry + generateCoaching() with fallback
+    ollama.ts       # local Ollama provider (streamed)
+    claude.ts       # opt-in remote Claude-via-proxy provider
+    ruleBased.ts    # offline deterministic provider + fallback
+    prompt.ts       # coach system prompt + report serializer
+    markdown.ts     # tiny zero-dep Markdown → HTML renderer
   render/
     skeleton.ts     # Canvas skeleton drawing (+ limb highlight)
   video/
