@@ -45,6 +45,15 @@ function sourceSize(
 }
 
 /**
+ * One reusable scratch canvas (+ its 2D context) for torso-histogram sampling.
+ * Reused across frames so the multi-person path doesn't allocate a fresh
+ * full-resolution canvas (and its backing memory) on every animation frame,
+ * which was a steady source of per-frame churn during scoring.
+ */
+let histCanvas: HTMLCanvasElement | null = null;
+let histCtx: CanvasRenderingContext2D | null = null;
+
+/**
  * Sample a torso color histogram for each detection by reading the torso region
  * (shoulders→hips bbox) from the source via a scratch 2D canvas. Gracefully
  * no-ops — returning all-undefined — when no 2D canvas/pixels are available
@@ -63,12 +72,16 @@ function sampleTorsoHistograms(
   const size = sourceSize(source);
   if (!size) return none;
   let ctx: CanvasRenderingContext2D | null;
-  let canvas: HTMLCanvasElement;
   try {
-    canvas = document.createElement("canvas");
-    canvas.width = size.w;
-    canvas.height = size.h;
-    ctx = canvas.getContext("2d", { willReadFrequently: true });
+    // Reuse a single scratch canvas across frames; only resize it when the
+    // source dimensions change. Behavior is identical to a fresh canvas.
+    if (!histCanvas) {
+      histCanvas = document.createElement("canvas");
+      histCtx = histCanvas.getContext("2d", { willReadFrequently: true });
+    }
+    if (histCanvas.width !== size.w) histCanvas.width = size.w;
+    if (histCanvas.height !== size.h) histCanvas.height = size.h;
+    ctx = histCtx;
     if (!ctx) return none;
     ctx.drawImage(source as CanvasImageSource, 0, 0, size.w, size.h);
   } catch {
@@ -183,6 +196,12 @@ export class PoseDetector {
     if (this.backendReady) return;
     await tf.setBackend("webgl");
     await tf.ready();
+    // Release WebGL textures as soon as they're freed rather than pooling them.
+    // Per-frame detection constantly allocates and discards textures; left
+    // pooled, that pool grows and surfaces as the monotonic memory growth seen
+    // across a clip (issue #14). A threshold of 0 keeps GPU memory flat without
+    // changing detection results (TF.js memory guidance).
+    tf.env().set("WEBGL_DELETE_TEXTURE_THRESHOLD", 0);
     this.backendReady = true;
   }
 
