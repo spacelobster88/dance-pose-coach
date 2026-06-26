@@ -131,3 +131,51 @@ export function drawSkeleton(
     ...opts,
   });
 }
+
+/** One skeleton to draw in a multi-person overlay. */
+export interface SkeletonLayer {
+  pose: Pose;
+  /** Draw faded (a non-selected bystander). */
+  dim?: boolean;
+  /** Bone edges to highlight (e.g. the worst-diverging limb on the locked one). */
+  highlightEdges?: Array<[number, number]>;
+}
+
+/**
+ * Draw several skeletons onto one canvas in a single clear: bystanders faded,
+ * the selected dancer at full strength. Used by multi-person mode so the user
+ * can see everyone the detector found and which one is locked.
+ */
+export function drawSkeletons(
+  canvas: HTMLCanvasElement,
+  layers: SkeletonLayer[],
+  opts: DrawOptions = {},
+): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const base = {
+    pointRadius: Math.max(3, canvas.width * 0.006),
+    lineWidth: Math.max(2, canvas.width * 0.004),
+    ...opts,
+  };
+  for (const layer of layers) {
+    ctx.save();
+    if (layer.dim) {
+      ctx.globalAlpha = 0.35;
+      strokePose(ctx, layer.pose, {
+        ...base,
+        // Muted gray bystander so the locked dancer's accent colors stand out.
+        pointColor: "#9aa0a6",
+        edgeColor: "#9aa0a6",
+        highlightEdges: undefined,
+      });
+    } else {
+      strokePose(ctx, layer.pose, {
+        ...base,
+        highlightEdges: layer.highlightEdges,
+      });
+    }
+    ctx.restore();
+  }
+}

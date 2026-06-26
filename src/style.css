@@ -274,6 +274,13 @@ button:disabled {
   pointer-events: none;
 }
 
+/* In multi-person mode the test canvas is clickable so the user can pick the
+   dancer to lock onto. */
+.pane canvas.selectable {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
 /* ---- Scoreboard ---- */
 .scoreboard {
   background: var(--surface);

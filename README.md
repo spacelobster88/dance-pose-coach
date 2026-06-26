@@ -61,6 +61,17 @@ the browser via TensorFlow.js.
 12. **Export a scored comparison clip** (#6) — **Export clip** records the
     side-by-side comparison (both skeletons + a score banner) entirely in the
     browser via `MediaRecorder` and downloads it as a `.webm` — no server.
+13. **Export format MP4 / WebM** (#7) — a format picker beside **Export clip**
+    chooses the container (default MP4, H.264; WebM uses VP9/VP8). Browsers that
+    can't record MP4 (e.g. Firefox) fall back to WebM and say so, and the
+    filename matches the container actually written.
+14. **Multi-person video + dancer tracking** (#8) — a **People** toggle switches
+    between *single-person* (the fast single-pose path) and *multi-person* mode,
+    which runs MoveNet MultiPose and a light tracker (`pose/tracker.ts`) so the
+    skeleton and score follow ONE dancer instead of flickering between bodies in
+    a crowded frame. Click a body in **Your attempt** to lock onto it; the lock
+    holds through brief occlusions/crossings and re-acquires the same person
+    rather than snapping to a stranger. Only a fresh, locked match is scored.
 
 ## v0.4 — viewpoint-robust strict scoring
 
@@ -153,6 +164,7 @@ src/
     dtw.ts          # banded DTW alignment over pose sequences (#2)
     streamDtw.ts    # streaming lag-compensated aligner for webcam (#5)
     perJoint.ts     # per-limb divergence + worst-limb tracking (#3)
+    tracker.ts      # multi-person id tracking + single-target lock (#8)
     keypoints.ts    # COCO-17 names, skeleton edges, types
   render/
     skeleton.ts     # Canvas skeleton drawing (+ limb highlight)

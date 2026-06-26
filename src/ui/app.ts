@@ -7,10 +7,14 @@ import {
   LIMB_GROUPS,
   type LimbDivergence,
 } from "../pose/perJoint";
+import { PoseTracker, TargetLock, type TrackedPose } from "../pose/tracker";
+import type { Pose } from "../pose/keypoints";
 import {
   drawSkeleton,
+  drawSkeletons,
   clearCanvas,
   syncCanvasToVideo,
+  type SkeletonLayer,
 } from "../render/skeleton";
 import { ScoreGraph } from "../render/scoreGraph";
 import { drawComposite, sizeComposite } from "../render/composite";
@@ -44,6 +48,7 @@ interface Dom {
   testFileControl: HTMLElement;
   testHeading: HTMLElement;
   modelSelect: HTMLSelectElement;
+  modeSelect: HTMLSelectElement;
   dtwBtn: HTMLButtonElement;
   playBtn: HTMLButtonElement;
   restartBtn: HTMLButtonElement;
@@ -82,6 +87,7 @@ export function initApp(): void {
     testFileControl: byId("test-file-control"),
     testHeading: byId("test-heading"),
     modelSelect: byId("model-select"),
+    modeSelect: byId("mode-select"),
     dtwBtn: byId("dtw-btn"),
     playBtn: byId("play-btn"),
     restartBtn: byId("restart-btn"),
@@ -105,6 +111,27 @@ export function initApp(): void {
   const detector = new PoseDetector(
     (dom.modelSelect.value as ModelVariant) || "lightning",
   );
+  // Per-video identity tracking + single-target lock (multi-person handling).
+  // Each video gets its own tracker/lock so the reference instructor and the
+  // dancer are followed independently even when their clips contain a crowd.
+  const refTracker = new PoseTracker();
+  const testTracker = new PoseTracker();
+  const refLock = new TargetLock();
+  const testLock = new TargetLock();
+  let personMode: "single" | "multi" =
+    dom.modeSelect.value === "multi" ? "multi" : "single";
+  // A pending click (in test-video pixel space) to (re)select the dancer.
+  let pendingTestClick: { x: number; y: number } | null = null;
+
+  /** Drop all tracked identities and target locks (clip/source/mode changed). */
+  const resetTracking = () => {
+    refTracker.reset();
+    testTracker.reset();
+    refLock.reset();
+    testLock.reset();
+    pendingTestClick = null;
+  };
+
   const tracker = new ScoreTracker(0.3);
   const limbTracker = new LimbDivergenceTracker(0.3);
   const scoreGraph = new ScoreGraph(dom.scoreHistory);
@@ -466,25 +493,90 @@ export function initApp(): void {
     },
   });
 
+  // Render a video's tracked people onto its overlay: in single-person mode just
+  // the locked skeleton; in multi-person mode every detected body, with the
+  // locked dancer at full strength and the rest faded. A held (coasting) lock is
+  // still drawn so a brief dropout doesn't blink the skeleton out.
+  const renderOverlay = (
+    canvas: HTMLCanvasElement,
+    tracked: TrackedPose[],
+    displayPose: Pose | null,
+    lockedId: number | null,
+    worstEdges?: Array<[number, number]>,
+  ) => {
+    if (personMode === "single") {
+      if (displayPose) drawSkeleton(canvas, displayPose, { highlightEdges: worstEdges });
+      else clearCanvas(canvas);
+      return;
+    }
+    const layers: SkeletonLayer[] = tracked.map((t) => ({
+      pose: t.pose,
+      dim: t.id !== lockedId,
+      highlightEdges: t.id === lockedId ? worstEdges : undefined,
+    }));
+    // If the locked dancer is coasting (not detected this frame), still draw the
+    // held pose so the lock is visible.
+    if (displayPose && !tracked.some((t) => t.id === lockedId)) {
+      layers.push({ pose: displayPose, dim: false, highlightEdges: worstEdges });
+    }
+    if (layers.length) drawSkeletons(canvas, layers);
+    else clearCanvas(canvas);
+  };
+
   async function processFrame(): Promise<void> {
     if (frameBusy || !modelReady) return;
     frameBusy = true;
     try {
       // Run sequentially: a single MoveNet detector instance cannot safely
       // execute two inferences concurrently (shared backend/tensor state).
-      const refPose = await detector.estimate(dom.refVideo);
-      const testPose = await detector.estimate(dom.testVideo);
+      // Single-person mode keeps the original fast single-pose path (and the
+      // model-variant selector / 3D BlazePose); multi-person mode runs MoveNet
+      // MultiPose and resolves identity through the tracker + lock.
+      let refDet: Pose[];
+      let testDet: Pose[];
+      if (personMode === "multi") {
+        refDet = await detector.estimateMany(dom.refVideo);
+        testDet = await detector.estimateMany(dom.testVideo);
+      } else {
+        const r = await detector.estimate(dom.refVideo);
+        const t = await detector.estimate(dom.testVideo);
+        refDet = r ? [r] : [];
+        testDet = t ? [t] : [];
+      }
+
+      const refTracked = refTracker.update(refDet);
+      const testTracked = testTracker.update(testDet);
+
+      const click = pendingTestClick;
+      pendingTestClick = null;
+      const refSel = refLock.select(refTracked, {
+        autoPick: true,
+        frame: { width: dom.refVideo.videoWidth, height: dom.refVideo.videoHeight },
+      });
+      const testSel = testLock.select(testTracked, {
+        autoPick: true,
+        frame: { width: dom.testVideo.videoWidth, height: dom.testVideo.videoHeight },
+        click,
+      });
 
       syncCanvasToVideo(dom.refCanvas, dom.refVideo);
       syncCanvasToVideo(dom.testCanvas, dom.testVideo);
+
+      // Poses to display (may be a held/coasted pose) vs. poses to score
+      // (only a fresh live match of the locked person — never a coasted or
+      // wrong-body pose, which is what keeps the score meaningful).
+      const refPose = refSel.pose;
+      const testPose = testSel.pose;
+      const refForScoreSrc = refSel.fresh ? refSel.pose : null;
+      const testForScoreSrc = testSel.fresh ? testSel.pose : null;
 
       // Score + per-limb breakdown first, so we know which limb (if any) to
       // highlight before drawing the test skeleton.
       let worstEdges: Array<[number, number]> | undefined;
       let lagForFrame: number | null = null;
-      if (refPose && testPose) {
-        const refNorm = normalizePose(refPose);
-        const testNorm = normalizePose(testPose);
+      if (refForScoreSrc && testForScoreSrc) {
+        const refNorm = normalizePose(refForScoreSrc);
+        const testNorm = normalizePose(testForScoreSrc);
         if (refNorm && testNorm) {
           // With live sync, match the camera pose against a short window of
           // recent reference poses (lag compensation) and score against the best
@@ -518,13 +610,8 @@ export function initApp(): void {
         }
       }
 
-      if (refPose) drawSkeleton(dom.refCanvas, refPose);
-      else clearCanvas(dom.refCanvas);
-      if (testPose) {
-        drawSkeleton(dom.testCanvas, testPose, { highlightEdges: worstEdges });
-      } else {
-        clearCanvas(dom.testCanvas);
-      }
+      renderOverlay(dom.refCanvas, refTracked, refPose, refSel.id);
+      renderOverlay(dom.testCanvas, testTracked, testPose, testSel.id, worstEdges);
 
       // While recording, composite this scored frame onto the export canvas.
       if (recorder.active) {
@@ -567,6 +654,7 @@ export function initApp(): void {
     if (!file) return;
     refReady = false;
     resetDtw(); // alignment is invalid once a clip changes
+    resetTracking(); // identities don't carry across clips
     updateControls();
     setStatus(`Loading reference video “${file.name}”…`);
     try {
@@ -588,6 +676,7 @@ export function initApp(): void {
     if (!file) return;
     testReady = false;
     resetDtw(); // alignment is invalid once a clip changes
+    resetTracking(); // identities don't carry across clips
     updateControls();
     setStatus(`Loading test video “${file.name}”…`);
     try {
@@ -619,6 +708,7 @@ export function initApp(): void {
     testReady = false;
     liveSync = false; // streaming alignment doesn't carry across a source switch
     resetDtw(); // a source switch invalidates any alignment
+    resetTracking(); // identities don't carry across a source switch
     resetScore();
     resetBreakdown();
     clearCanvas(dom.testCanvas);
@@ -680,6 +770,54 @@ export function initApp(): void {
       setStatus("Failed to switch model.");
     }
     updateControls();
+  });
+
+  // ---- Person mode (single vs multi) ----
+  dom.modeSelect.addEventListener("change", async () => {
+    const mode = dom.modeSelect.value === "multi" ? "multi" : "single";
+    player.pause();
+    personMode = mode;
+    resetTracking();
+    resetScore();
+    resetBreakdown();
+    clearCanvas(dom.refCanvas);
+    clearCanvas(dom.testCanvas);
+    // The test overlay only accepts clicks (to pick a dancer) in multi mode.
+    dom.testCanvas.classList.toggle("selectable", mode === "multi");
+    if (mode === "multi") {
+      setStatus("Loading multi-person model…");
+      try {
+        await detector.loadMulti();
+        setStatus(
+          "Multi-person mode — press Play, then click the dancer in “Your attempt” to lock onto them.",
+        );
+      } catch (err) {
+        console.error(err);
+        // Fall back to single-person so the app stays usable.
+        personMode = "single";
+        dom.modeSelect.value = "single";
+        dom.testCanvas.classList.remove("selectable");
+        setStatus("Couldn't load the multi-person model; staying single-person.");
+      }
+    } else {
+      setStatus("Single-person mode.");
+    }
+    player.renderOnce();
+    updateControls();
+  });
+
+  // Click a body in the test overlay (multi mode) to lock onto that dancer.
+  dom.testCanvas.addEventListener("click", (ev) => {
+    if (personMode !== "multi") return;
+    const rect = dom.testCanvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    // Map the click from CSS pixels into the canvas's source-video pixel space.
+    pendingTestClick = {
+      x: (ev.clientX - rect.left) * (dom.testCanvas.width / rect.width),
+      y: (ev.clientY - rect.top) * (dom.testCanvas.height / rect.height),
+    };
+    // If paused, re-render once so the new selection shows immediately.
+    if (!player.playing) player.renderOnce();
   });
 
   // ---- DTW alignment ----
@@ -828,4 +966,6 @@ export function initApp(): void {
   setStrictnessReadout(Number(dom.strictness.value));
   // Calibration cluster starts hidden (file mode by default) and idle.
   setCalibVisibility();
+  // Test overlay is only clickable for dancer selection in multi-person mode.
+  dom.testCanvas.classList.toggle("selectable", personMode === "multi");
 }
