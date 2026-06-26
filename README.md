@@ -115,6 +115,38 @@ what to practise once the music stops. v0.5 turns the run into actionable notes:
     big-movement segment isn't penalized over a slow held pose. Segmentation is
     fixed time windows for v1 (audio beat/onset detection is a noted follow-up).
 
+### v0.5 — multi-person identity hardening (#12)
+
+The #8 tracker followed one dancer by motion alone, which can drift to a
+neighbor during a **dense crossing** or a **brief occlusion** when bodies share
+the same patch of frame. This pass hardens identity so the locked dancer holds
+through those ambiguities (all in `pose/tracker.ts` + `pose/detector.ts`):
+
+- **HSV torso color appearance cue (DeepSORT-lite)** — `detector.estimateMany`
+  samples each detection's torso region from a scratch 2D canvas and builds a
+  normalized **8×4 hue×saturation histogram** (gating near-black / near-white /
+  low-saturation pixels), compared with a symmetric **Bhattacharyya distance**
+  in `[0, 1]`. Per-track appearance is **EMA-blended** each frame. The sampler
+  **gracefully no-ops headless** (no canvas → appearance stays undefined and the
+  tracker falls back to motion-only), and the histogram + distance functions are
+  pure number-array code so they run identically in Node tests.
+- **Global optimal assignment + motion model** — `PoseTracker.update` replaces
+  greedy nearest matching with a **Hungarian (Kuhn–Munkres)** assignment over a
+  combined cost `motionWeight·(1 − IoU(predicted, det)) + appearanceWeight·histDist`,
+  with a **motion gate** (pairs beyond `gate · bboxDiag` are infeasible) and
+  **constant-velocity prediction** so a track that misses a frame predicts where
+  it should reappear. When two bodies are geometrically tied, **color breaks the
+  tie** instead of an arbitrary swap.
+- **Ambiguity-guarded re-acquire** — when the locked id is gone,
+  `TargetLock.select` only re-locks a candidate that clears the motion gate, a
+  **raised confidence bar**, and an **appearance bar**; and if the **top-2
+  candidates' appearance distances are within `ambiguityMargin`**, it returns
+  `"lost"` rather than risk hopping onto a look-alike bystander.
+
+Defaults: `motionWeight 0.6`, `appearanceWeight 0.4`, `gate 1.5`, appearance
+EMA `0.25`, velocity EMA `0.5`, `ambiguityMargin 0.1`. All knobs are optional;
+the public `update` / `select` API is unchanged. Covered by `test/tracker.test.ts`.
+
 ## v0.7 — AI coaching insights (#15)
 
 The score and per-limb bars are numbers; **AI coaching** turns them into

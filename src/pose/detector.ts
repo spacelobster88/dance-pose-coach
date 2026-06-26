@@ -2,7 +2,8 @@ import * as poseDetection from "@tensorflow-models/pose-detection";
 import * as tf from "@tensorflow/tfjs-core";
 import "@tensorflow/tfjs-backend-webgl";
 
-import type { Pose } from "./keypoints";
+import { KEYPOINT_INDEX, type Pose } from "./keypoints";
+import { buildHistogram, poseBBox } from "./tracker";
 
 /**
  * Model selector. The two MoveNet variants are the DEFAULT 2D path; "blazepose"
@@ -24,6 +25,96 @@ const MOVENET_MODEL_TYPE: Record<"lightning" | "thunder", MoveNetModelType> = {
 
 function isBlazePose(v: ModelVariant): boolean {
   return v === "blazepose";
+}
+
+/** Width/height of the source media for canvas sampling, or null if unknown. */
+function sourceSize(
+  source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement,
+): { w: number; h: number } | null {
+  const w =
+    (source as HTMLVideoElement).videoWidth ||
+    (source as HTMLCanvasElement).width ||
+    (source as HTMLImageElement).naturalWidth ||
+    0;
+  const h =
+    (source as HTMLVideoElement).videoHeight ||
+    (source as HTMLCanvasElement).height ||
+    (source as HTMLImageElement).naturalHeight ||
+    0;
+  return w > 0 && h > 0 ? { w, h } : null;
+}
+
+/**
+ * Sample a torso color histogram for each detection by reading the torso region
+ * (shoulders→hips bbox) from the source via a scratch 2D canvas. Gracefully
+ * no-ops — returning all-undefined — when no 2D canvas/pixels are available
+ * (Node/test), in which case appearance stays undefined and the tracker falls
+ * back to motion-only matching. Never throws.
+ */
+function sampleTorsoHistograms(
+  source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement,
+  poses: Pose[],
+): Array<number[] | undefined> {
+  const none: Array<number[] | undefined> = poses.map(() => undefined);
+  // No DOM / no canvas factory (Node, SSR) → bail.
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    return none;
+  }
+  const size = sourceSize(source);
+  if (!size) return none;
+  let ctx: CanvasRenderingContext2D | null;
+  let canvas: HTMLCanvasElement;
+  try {
+    canvas = document.createElement("canvas");
+    canvas.width = size.w;
+    canvas.height = size.h;
+    ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return none;
+    ctx.drawImage(source as CanvasImageSource, 0, 0, size.w, size.h);
+  } catch {
+    return none; // tainted canvas / unsupported source → motion-only
+  }
+
+  const LS = KEYPOINT_INDEX.left_shoulder;
+  const RS = KEYPOINT_INDEX.right_shoulder;
+  const LH = KEYPOINT_INDEX.left_hip;
+  const RH = KEYPOINT_INDEX.right_hip;
+
+  return poses.map((pose) => {
+    // Prefer a tight torso box (shoulders→hips); fall back to the pose bbox.
+    const k = pose.keypoints;
+    const torso = [k[LS], k[RS], k[LH], k[RH]].filter((p) => p && (p.score ?? 0) >= 0.3);
+    let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+    if (torso.length >= 3) {
+      const xs = torso.map((p) => p.x);
+      const ys = torso.map((p) => p.y);
+      box = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+    } else {
+      box = poseBBox(pose);
+    }
+    if (!box) return undefined;
+    const x0 = Math.max(0, Math.floor(box.minX));
+    const y0 = Math.max(0, Math.floor(box.minY));
+    const x1 = Math.min(size.w, Math.ceil(box.maxX));
+    const y1 = Math.min(size.h, Math.ceil(box.maxY));
+    const bw = x1 - x0;
+    const bh = y1 - y0;
+    if (bw <= 1 || bh <= 1) return undefined;
+    try {
+      const img = ctx!.getImageData(x0, y0, bw, bh).data; // RGBA
+      // Flatten to RGB, skipping fully-transparent pixels.
+      const rgb: number[] = [];
+      for (let i = 0; i + 3 < img.length; i += 4) {
+        if (img[i + 3] < 8) continue;
+        rgb.push(img[i], img[i + 1], img[i + 2]);
+      }
+      if (rgb.length < 3) return undefined;
+      const hist = buildHistogram(rgb);
+      return hist.some((v) => v > 0) ? hist : undefined;
+    } catch {
+      return undefined;
+    }
+  });
 }
 
 /** Map a raw detector pose into our COCO-17 `Pose` (2D, plus 3D when present). */
@@ -194,11 +285,18 @@ export class PoseDetector {
     maxPoses = 6,
   ): Promise<Pose[]> {
     await this.loadMulti();
-    const poses = await this.multiDetector!.estimatePoses(source, {
+    const raw = await this.multiDetector!.estimatePoses(source, {
       maxPoses,
       flipHorizontal: false,
     });
-    return poses.map(toPose);
+    const poses = raw.map(toPose);
+    // Attach a torso color histogram per detection (DeepSORT-lite appearance
+    // cue) when a 2D canvas is available; a graceful no-op headless.
+    const hists = sampleTorsoHistograms(source, poses);
+    for (let i = 0; i < poses.length; i++) {
+      if (hists[i]) poses[i].appearance = hists[i];
+    }
+    return poses;
   }
 
   dispose(): void {
