@@ -32,6 +32,10 @@ demo/*.jpg
 !demo/assets/reference.mp4
 !demo/assets/test.mp4
 !demo/dance-pose-coach-demo.mp4
+!demo/assets/far-to-close.mp4
+!demo/assets/swan-lake-hq.mov
+!demo/assets/swan-lake-mq.mov
+!demo/assets/swan-lake-lq.mov
 
 # Harness loop state
 .harness/
