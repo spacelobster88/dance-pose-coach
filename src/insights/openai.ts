@@ -30,9 +30,25 @@ const DEFAULTS = {
   baseUrl: "https://api.openai.com/v1",
 };
 
+// Build-time key, injected by Vite's `define` from the DANCE_COACH_OPENAI_KEY
+// shell var (see vite.config.ts). Replaced with a string literal at bundle time;
+// outside Vite (unit tests / plain Node) the identifier is undeclared, so the
+// `typeof` guard yields "" instead of throwing — keeping OpenAI opt-in there.
+declare const __DPC_OPENAI_KEY__: string;
+
+function buildTimeKey(): string {
+  try {
+    return typeof __DPC_OPENAI_KEY__ === "string" ? __DPC_OPENAI_KEY__.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 function readConfig(): OpenAIConfig {
   return {
-    apiKey: (getLocal("dpc.coach.openai.apiKey") || "").trim(),
+    // A key pasted into the panel (localStorage) wins; otherwise fall back to the
+    // one baked in at build time. Both stay browser-only.
+    apiKey: (getLocal("dpc.coach.openai.apiKey") || buildTimeKey() || "").trim(),
     model: getLocal("dpc.coach.openai.model") || DEFAULTS.model,
     // Trim any trailing slash so we can append paths predictably.
     baseUrl: (getLocal("dpc.coach.openai.baseUrl") || DEFAULTS.baseUrl).replace(/\/+$/, ""),
