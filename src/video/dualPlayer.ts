@@ -12,7 +12,7 @@
  */
 
 export interface DualPlayerCallbacks {
-  /** Called once per animation frame while playing, after sync correction. */
+  /** Called once per detection tick while playing, after sync correction. */
   onFrame: (ref: HTMLVideoElement, test: HTMLVideoElement) => void;
   onPlay?: () => void;
   onPause?: () => void;
@@ -22,25 +22,43 @@ export interface DualPlayerCallbacks {
 const DRIFT_THRESHOLD_SEC = 0.12;
 
 /**
- * Detection cadence cap. The rAF loop still runs every frame to keep the test
- * clip synced to the reference (smooth video), but the expensive `onFrame`
- * detection+scoring callback fires at most once per this interval (~24fps).
- * Decoupling detection from the ~60fps render rate is what relieves the
- * main-thread saturation behind the jank + score latency in issue #14.
+ * Cadence cap for the rAF fallback path (browsers without
+ * `requestVideoFrameCallback`). Detection is the heavy work — two inferences +
+ * scoring + draw — and the render loop fires at 60–120fps, far faster than a
+ * dance clip's ~24–30fps decoded-frame rate, so running detection every render
+ * frame just saturates the main thread (the jank + score-lag root cause). We
+ * cap the fallback at ~24fps; the rVFC path instead infers once per *decoded*
+ * frame, which is naturally throttled to the source's frame rate.
  */
-const DETECT_INTERVAL_MS = 1000 / 24;
+const DETECT_FALLBACK_INTERVAL_MS = 1000 / 24;
+
+/** A <video> that supports the (still un-typed in our lib) rVFC API. */
+type RvfcVideo = HTMLVideoElement & {
+  requestVideoFrameCallback(
+    cb: (now: number, metadata: unknown) => void,
+  ): number;
+  cancelVideoFrameCallback(handle: number): void;
+};
+
+function asRvfc(v: HTMLVideoElement): RvfcVideo | null {
+  return typeof (v as RvfcVideo).requestVideoFrameCallback === "function"
+    ? (v as RvfcVideo)
+    : null;
+}
 
 export class DualPlayer {
   readonly ref: HTMLVideoElement;
   readonly test: HTMLVideoElement;
   private rafId: number | null = null;
+  private rvfcId: number | null = null;
+  // The reference clip drives the loop; prefer per-decoded-frame callbacks when
+  // available so detection tracks the actual decoded frames, not the render rate.
+  private rvfc: RvfcVideo | null = null;
+  private lastDetectMs = 0;
   private callbacks: DualPlayerCallbacks;
   private running = false;
   private liveTest = false;
   private warp: ((refTime: number) => number) | null = null;
-  // Timestamp (performance.now ms) of the last detection callback, used to
-  // throttle detection to DETECT_INTERVAL_MS independently of the render rate.
-  private lastDetectionMs = 0;
 
   constructor(
     ref: HTMLVideoElement,
@@ -50,6 +68,7 @@ export class DualPlayer {
     this.ref = ref;
     this.test = test;
     this.callbacks = callbacks;
+    this.rvfc = asRvfc(ref);
 
     // When the reference ends, stop the loop and surface the event.
     this.ref.addEventListener("ended", () => {
@@ -86,14 +105,12 @@ export class DualPlayer {
   async play(): Promise<void> {
     if (!this.bothReady) return;
     this.running = true;
-    // Force the first loop iteration to run detection immediately (don't wait
-    // up to one throttle interval before the first scored frame).
-    this.lastDetectionMs = this.nowMs() - DETECT_INTERVAL_MS;
+    this.lastDetectMs = 0; // detect on the very first tick
     // Drive the test clip from the reference's progress, so align before play.
     if (!this.liveTest) this.syncTestToRef(true);
     await Promise.all([this.ref.play(), this.test.play()]);
     this.callbacks.onPlay?.();
-    this.loop();
+    this.scheduleTick();
   }
 
   pause(): void {
@@ -103,6 +120,10 @@ export class DualPlayer {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
+    }
+    if (this.rvfcId !== null && this.rvfc) {
+      this.rvfc.cancelVideoFrameCallback(this.rvfcId);
+      this.rvfcId = null;
     }
     this.callbacks.onPause?.();
   }
@@ -163,25 +184,39 @@ export class DualPlayer {
     this.callbacks.onFrame(this.ref, this.test);
   }
 
-  private loop = (): void => {
+  /**
+   * Schedule the next detection tick. Prefers `requestVideoFrameCallback` so we
+   * infer once per *decoded* reference frame (naturally throttled to the clip's
+   * frame rate, decoupled from the 60–120fps render loop); otherwise falls back
+   * to rAF with a fixed cadence cap.
+   */
+  private scheduleTick(): void {
+    if (this.rvfc) {
+      this.rvfcId = this.rvfc.requestVideoFrameCallback((now) =>
+        this.tick(now),
+      );
+    } else {
+      this.rafId = requestAnimationFrame((now) => this.tick(now));
+    }
+  }
+
+  private tick = (nowMs: number): void => {
     if (!this.running) return;
-    // Keep the test clip synced to the reference every render frame (smooth
-    // video), but run the heavy detection callback at most ~24fps.
+    // Drift correction is cheap; keep the test clip aligned every tick.
     this.syncTestToRef(false);
-    const now = this.nowMs();
-    if (now - this.lastDetectionMs >= DETECT_INTERVAL_MS) {
-      this.lastDetectionMs = now;
+    // On the rAF fallback, throttle the heavy detection to a fixed cadence. The
+    // rVFC path already fires once per decoded frame, so it runs every tick;
+    // app.ts's `frameBusy` guard drops any tick that lands while an inference is
+    // still in flight, so detection never overlaps itself regardless of path.
+    const due =
+      this.rvfc !== null ||
+      nowMs - this.lastDetectMs >= DETECT_FALLBACK_INTERVAL_MS;
+    if (due) {
+      this.lastDetectMs = nowMs;
       this.callbacks.onFrame(this.ref, this.test);
     }
-    this.rafId = requestAnimationFrame(this.loop);
+    this.scheduleTick();
   };
-
-  /** Monotonic clock in ms, with a Date.now fallback for non-DOM contexts. */
-  private nowMs(): number {
-    return typeof performance !== "undefined" && performance.now
-      ? performance.now()
-      : Date.now();
-  }
 
   dispose(): void {
     this.pause();

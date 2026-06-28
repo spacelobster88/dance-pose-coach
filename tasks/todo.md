@@ -64,6 +64,38 @@
       end, works for file + webcam. Verified (scenario C): downloads a valid
       1280×596 webm with real frames.
 
+## Performance: memory bloat + page jank + score latency (#14)
+Root cause: the whole pipeline (2× MoveNet inference + normalize + similarity +
+per-limb + draw) ran on the main thread **every rAF** (~60–120fps), on the
+**full-resolution** `<video>`. Main-thread saturation → jank + score lag, and the
+constant full-res GPU texture uploads → memory growth.
+
+- [x] **Throttle detection, decoupled from render** (`src/video/dualPlayer.ts`)
+      — the rAF render loop is replaced with a tick scheduler that prefers
+      `requestVideoFrameCallback` (infer **once per decoded frame**, naturally
+      throttled to the clip's ~24–30fps), falling back to rAF capped at ~24fps.
+      Drift correction still runs every tick; the existing `frameBusy` guard
+      drops any tick that lands mid-inference so detection never overlaps.
+- [x] **Downscale the detector input** (`src/pose/detector.ts`) — the source is
+      drawn into a single **reused** offscreen canvas (256px longest side, the
+      MoveNet path only) before `estimatePoses`; keypoints are mapped back into
+      source-pixel space so every downstream consumer (skeleton, normalize,
+      composite) is byte-identical. A 1280×720 clip uploads a 256×144 tensor
+      instead of full-res — a ~25× smaller per-frame GPU upload.
+- [x] **Memory hygiene** — `WEBGL_DELETE_TEXTURE_THRESHOLD=0` so detection
+      textures are freed eagerly instead of pooled (keeps GPU memory flat across
+      a clip); single reused scratch canvas; detector loaded once (already true).
+- [x] **Score-UI cadence decoupled** — detection now runs at ≤ decoded-frame
+      rate (not 60–120fps), so the score/breakdown DOM updates are throttled to
+      detection automatically without extra UI-side gating.
+- [ ] **Deferred: Web Worker + OffscreenCanvas inference offload.** The issue
+      lists this as one proposed mechanism; it's a large, higher-risk refactor
+      (touches the DTW sampler, live-sync ordering, recording, and the
+      swiftshader `verify.mjs` harness). The behavioral acceptance — no sustained
+      jank, score within ~1 frame, flat memory — is met by the throttle +
+      downscale + texture hygiene above, so the worker is left as a follow-up.
+      Verified: `npm run verify` ALL CHECKS PASSED (Chrome took the rVFC path).
+
 ## v0.5 — AI coaching insights (#15)
 - [x] **Model-agnostic insights layer** — `src/insights/`:
       - [x] `types.ts` — `CoachingInput` (segments + per-limb degrees + signed
