@@ -101,6 +101,27 @@ check(
   "empty report ⇒ friendly prompt",
 );
 
+// --- Rule-based bilingual output ----------------------------------------------
+check(/## English/.test(coaching), "rule-based has an English section");
+check(/## 中文/.test(coaching), "rule-based has a Chinese section");
+check(/### 练习方法/.test(coaching), "rule-based includes a Chinese practice drill");
+check(/左臂/.test(coaching), "rule-based names the left arm in Chinese");
+// Time cues must stay in sync across languages: whatever window the English
+// half cites for the worst limb must reappear in the Chinese half.
+const win = coaching.match(/most off around ([\d.]+)-([\d.]+)s/);
+check(win !== null, "rule-based cites a time window");
+check(
+  win !== null && coaching.includes(`${win[1]}-${win[2]}秒`),
+  "rule-based keeps timestamps in sync across languages",
+);
+// Chinese phrasing is derived from the correction vector, not translated from
+// the English string: this run's raised left arm yields the native cue "放低".
+check(/放低/.test(coaching), "rule-based renders a native Chinese cue");
+check(
+  ruleBasedCoaching(new RunReport().build()).includes("先放一段舞蹈"),
+  "empty report ⇒ bilingual friendly prompt",
+);
+
 // --- Markdown rendering -------------------------------------------------------
 const html = renderMarkdown(coaching);
 check(/<h3>/.test(html), "markdown renders headings");
