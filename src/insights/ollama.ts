@@ -72,6 +72,12 @@ export const ollamaProvider: CoachingProvider = {
       }),
     });
     if (!res.ok || !res.body) {
+      // A 404 from /api/chat almost always means the model tag isn't pulled
+      // (the /api/tags availability probe still passes when the server is up).
+      // Point the user at the fix instead of a bare status code.
+      if (res.status === 404) {
+        throw new Error(`Ollama model "${model}" not found — run: ollama pull ${model}`);
+      }
       throw new Error(`Ollama request failed (${res.status})`);
     }
 
