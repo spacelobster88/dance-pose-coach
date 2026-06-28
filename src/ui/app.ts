@@ -88,6 +88,9 @@ interface Dom {
   coachSource: HTMLElement;
   coachConfigOllama: HTMLElement;
   coachOllamaModel: HTMLInputElement;
+  coachConfigOpenai: HTMLElement;
+  coachOpenaiKey: HTMLInputElement;
+  coachOpenaiModel: HTMLInputElement;
   coachConfigClaude: HTMLElement;
   coachClaudeUrl: HTMLInputElement;
   reportBody: HTMLElement;
@@ -140,6 +143,9 @@ export function initApp(): void {
     coachSource: byId("coach-source"),
     coachConfigOllama: byId("coach-config-ollama"),
     coachOllamaModel: byId("coach-ollama-model"),
+    coachConfigOpenai: byId("coach-config-openai"),
+    coachOpenaiKey: byId("coach-openai-key"),
+    coachOpenaiModel: byId("coach-openai-model"),
     coachConfigClaude: byId("coach-config-claude"),
     coachClaudeUrl: byId("coach-claude-url"),
     reportBody: byId("report-body"),
@@ -1091,15 +1097,19 @@ export function initApp(): void {
   const COACH_LS = {
     provider: "dpc.coach.provider",
     ollamaModel: "dpc.coach.ollama.model",
+    openaiKey: "dpc.coach.openai.apiKey",
+    openaiModel: "dpc.coach.openai.model",
     claudeUrl: "dpc.coach.claude.proxyUrl",
   };
   let coaching = false;
 
-  // Show the config row relevant to the selected provider (model for local,
-  // proxy URL for the opt-in remote path).
+  // Show the config row relevant to the selected provider (model for local, API
+  // key for OpenAI, proxy URL for the Claude path). Remote rows are opt-in, so
+  // only shown when explicitly chosen — never under "auto".
   const setCoachConfigVisibility = () => {
     const p = dom.coachProvider.value;
     dom.coachConfigOllama.hidden = !(p === "ollama" || p === "auto");
+    dom.coachConfigOpenai.hidden = p !== "openai";
     dom.coachConfigClaude.hidden = p !== "claude";
   };
 
@@ -1165,6 +1175,18 @@ export function initApp(): void {
     if (v) localStorage.setItem(COACH_LS.ollamaModel, v);
     else localStorage.removeItem(COACH_LS.ollamaModel);
   });
+  dom.coachOpenaiKey.addEventListener("change", () => {
+    // The key is a secret: persist it to localStorage (browser-only) but never
+    // log it. Clearing the field removes it.
+    const v = dom.coachOpenaiKey.value.trim();
+    if (v) localStorage.setItem(COACH_LS.openaiKey, v);
+    else localStorage.removeItem(COACH_LS.openaiKey);
+  });
+  dom.coachOpenaiModel.addEventListener("change", () => {
+    const v = dom.coachOpenaiModel.value.trim();
+    if (v) localStorage.setItem(COACH_LS.openaiModel, v);
+    else localStorage.removeItem(COACH_LS.openaiModel);
+  });
   dom.coachClaudeUrl.addEventListener("change", () => {
     const v = dom.coachClaudeUrl.value.trim();
     if (v) localStorage.setItem(COACH_LS.claudeUrl, v);
@@ -1175,6 +1197,8 @@ export function initApp(): void {
   const savedCoachProvider = localStorage.getItem(COACH_LS.provider);
   if (savedCoachProvider) dom.coachProvider.value = savedCoachProvider;
   dom.coachOllamaModel.value = localStorage.getItem(COACH_LS.ollamaModel) ?? "";
+  dom.coachOpenaiKey.value = localStorage.getItem(COACH_LS.openaiKey) ?? "";
+  dom.coachOpenaiModel.value = localStorage.getItem(COACH_LS.openaiModel) ?? "";
   dom.coachClaudeUrl.value = localStorage.getItem(COACH_LS.claudeUrl) ?? "";
   setCoachConfigVisibility();
 

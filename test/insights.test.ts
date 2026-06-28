@@ -123,5 +123,12 @@ check(remote.providerId === "rule-based", "unconfigured Claude ⇒ fallback");
 check(remote.fellBack === true, "fallback flag set");
 check(Boolean(remote.note), "fallback explains why", remote.note);
 
+// Same contract for OpenAI: with no API key configured (no localStorage in CI),
+// the remote provider is unavailable and we fall back with an explanatory note.
+const openai = await generateCoaching(input, { provider: "openai" });
+check(openai.providerId === "rule-based", "unconfigured OpenAI ⇒ fallback");
+check(openai.fellBack === true, "OpenAI fallback flag set");
+check(/OpenAI/.test(openai.note ?? ""), "OpenAI fallback explains why", openai.note);
+
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

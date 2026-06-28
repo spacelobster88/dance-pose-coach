@@ -360,9 +360,10 @@
         <div class="coaching-head">
           <h3>✨ AI coaching</h3>
           <label for="coach-provider" class="visually-hidden">Coaching provider</label>
-          <select id="coach-provider" class="secondary" title="Where coaching is generated. Local Ollama and the offline report keep everything on-device; Claude is opt-in and sends derived stats (never video) to your proxy.">
+          <select id="coach-provider" class="secondary" title="Where coaching is generated. Local Ollama and the offline report keep everything on-device; OpenAI and Claude are opt-in and send derived stats (never video) to that provider.">
             <option value="auto">Auto · local if available</option>
             <option value="ollama">Local · Ollama</option>
+            <option value="openai">Remote · OpenAI (opt-in)</option>
             <option value="claude">Remote · Claude (opt-in)</option>
             <option value="rule-based">Offline · rule-based</option>
           </select>
@@ -373,6 +374,12 @@
         <div id="coach-config-ollama" class="coaching-config" hidden>
           <label for="coach-ollama-model">Ollama model</label>
           <input id="coach-ollama-model" type="text" placeholder="llama3.1" />
+        </div>
+        <div id="coach-config-openai" class="coaching-config" hidden>
+          <label for="coach-openai-key">OpenAI API key</label>
+          <input id="coach-openai-key" type="password" autocomplete="off" placeholder="sk-… (stored only in this browser)" />
+          <label for="coach-openai-model">Model</label>
+          <input id="coach-openai-model" type="text" placeholder="gpt-4o-mini" />
         </div>
         <div id="coach-config-claude" class="coaching-config" hidden>
           <label for="coach-claude-url">Claude proxy URL</label>

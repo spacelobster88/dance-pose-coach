@@ -14,6 +14,7 @@ import type {
 } from "./types";
 import { ruleBasedProvider, ruleBasedCoaching } from "./ruleBased";
 import { ollamaProvider } from "./ollama";
+import { openaiProvider } from "./openai";
 import { claudeProvider } from "./claude";
 
 export type { CoachingInput, CoachingProvider, TokenSink } from "./types";
@@ -22,11 +23,12 @@ export { renderMarkdown } from "./markdown";
 export { ruleBasedCoaching } from "./ruleBased";
 
 /** "auto" lets the dispatcher choose the best available provider. */
-export type ProviderChoice = "auto" | "ollama" | "claude" | "rule-based";
+export type ProviderChoice = "auto" | "ollama" | "openai" | "claude" | "rule-based";
 
 /** All registered providers, keyed by id. */
 export const PROVIDERS: Record<string, CoachingProvider> = {
   [ollamaProvider.id]: ollamaProvider,
+  [openaiProvider.id]: openaiProvider,
   [claudeProvider.id]: claudeProvider,
   [ruleBasedProvider.id]: ruleBasedProvider,
 };
@@ -53,9 +55,14 @@ export interface CoachingResult {
   note?: string;
 }
 
-/** Resolve "auto" to the first available LLM provider, else rule-based. */
+/**
+ * Resolve "auto" to the first available LLM provider, else rule-based. Order is
+ * local-first to honor the on-device privacy default: a running Ollama wins, then
+ * an opt-in remote (OpenAI, then a Claude proxy), and finally the offline report.
+ */
 async function resolveAuto(): Promise<CoachingProvider> {
   if (await ollamaProvider.available()) return ollamaProvider;
+  if (await openaiProvider.available()) return openaiProvider;
   if (await claudeProvider.available()) return claudeProvider;
   return ruleBasedProvider;
 }
@@ -85,9 +92,11 @@ export async function generateCoaching(
       note =
         choice === "ollama"
           ? "Ollama isn't reachable on localhost:11434 — used the offline report instead."
-          : choice === "claude"
-            ? "No Claude proxy is configured — used the offline report instead."
-            : undefined;
+          : choice === "openai"
+            ? "No OpenAI API key is set — add one in the coaching panel; used the offline report instead."
+            : choice === "claude"
+              ? "No Claude proxy is configured — used the offline report instead."
+              : undefined;
       provider = ruleBasedProvider;
     }
   }
