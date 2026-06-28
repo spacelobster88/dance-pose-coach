@@ -21,6 +21,15 @@ export interface DualPlayerCallbacks {
 
 const DRIFT_THRESHOLD_SEC = 0.12;
 
+/**
+ * Detection cadence cap. The rAF loop still runs every frame to keep the test
+ * clip synced to the reference (smooth video), but the expensive `onFrame`
+ * detection+scoring callback fires at most once per this interval (~24fps).
+ * Decoupling detection from the ~60fps render rate is what relieves the
+ * main-thread saturation behind the jank + score latency in issue #14.
+ */
+const DETECT_INTERVAL_MS = 1000 / 24;
+
 export class DualPlayer {
   readonly ref: HTMLVideoElement;
   readonly test: HTMLVideoElement;
@@ -29,6 +38,9 @@ export class DualPlayer {
   private running = false;
   private liveTest = false;
   private warp: ((refTime: number) => number) | null = null;
+  // Timestamp (performance.now ms) of the last detection callback, used to
+  // throttle detection to DETECT_INTERVAL_MS independently of the render rate.
+  private lastDetectionMs = 0;
 
   constructor(
     ref: HTMLVideoElement,
@@ -74,6 +86,9 @@ export class DualPlayer {
   async play(): Promise<void> {
     if (!this.bothReady) return;
     this.running = true;
+    // Force the first loop iteration to run detection immediately (don't wait
+    // up to one throttle interval before the first scored frame).
+    this.lastDetectionMs = this.nowMs() - DETECT_INTERVAL_MS;
     // Drive the test clip from the reference's progress, so align before play.
     if (!this.liveTest) this.syncTestToRef(true);
     await Promise.all([this.ref.play(), this.test.play()]);
@@ -150,10 +165,23 @@ export class DualPlayer {
 
   private loop = (): void => {
     if (!this.running) return;
+    // Keep the test clip synced to the reference every render frame (smooth
+    // video), but run the heavy detection callback at most ~24fps.
     this.syncTestToRef(false);
-    this.callbacks.onFrame(this.ref, this.test);
+    const now = this.nowMs();
+    if (now - this.lastDetectionMs >= DETECT_INTERVAL_MS) {
+      this.lastDetectionMs = now;
+      this.callbacks.onFrame(this.ref, this.test);
+    }
     this.rafId = requestAnimationFrame(this.loop);
   };
+
+  /** Monotonic clock in ms, with a Date.now fallback for non-DOM contexts. */
+  private nowMs(): number {
+    return typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
+  }
 
   dispose(): void {
     this.pause();
