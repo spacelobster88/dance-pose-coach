@@ -2,7 +2,8 @@ import * as poseDetection from "@tensorflow-models/pose-detection";
 import * as tf from "@tensorflow/tfjs-core";
 import "@tensorflow/tfjs-backend-webgl";
 
-import type { Pose } from "./keypoints";
+import { KEYPOINT_INDEX, type Pose } from "./keypoints";
+import { buildHistogram, poseBBox } from "./tracker";
 
 /**
  * Model selector. The two MoveNet variants are the DEFAULT 2D path; "blazepose"
@@ -30,17 +31,6 @@ type ImageSource =
   | HTMLCanvasElement
   | HTMLImageElement;
 
-/** Intrinsic pixel size of a detector input source. */
-function sourceSize(src: ImageSource): { w: number; h: number } {
-  if (src instanceof HTMLVideoElement) {
-    return { w: src.videoWidth, h: src.videoHeight };
-  }
-  if (src instanceof HTMLImageElement) {
-    return { w: src.naturalWidth, h: src.naturalHeight };
-  }
-  return { w: src.width, h: src.height };
-}
-
 type MoveNetModelType =
   (typeof poseDetection.movenet.modelType)[keyof typeof poseDetection.movenet.modelType];
 
@@ -51,6 +41,109 @@ const MOVENET_MODEL_TYPE: Record<"lightning" | "thunder", MoveNetModelType> = {
 
 function isBlazePose(v: ModelVariant): boolean {
   return v === "blazepose";
+}
+
+/** Width/height of the source media for canvas sampling, or null if unknown. */
+function sourceSize(
+  source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement,
+): { w: number; h: number } | null {
+  const w =
+    (source as HTMLVideoElement).videoWidth ||
+    (source as HTMLCanvasElement).width ||
+    (source as HTMLImageElement).naturalWidth ||
+    0;
+  const h =
+    (source as HTMLVideoElement).videoHeight ||
+    (source as HTMLCanvasElement).height ||
+    (source as HTMLImageElement).naturalHeight ||
+    0;
+  return w > 0 && h > 0 ? { w, h } : null;
+}
+
+/**
+ * One reusable scratch canvas (+ its 2D context) for torso-histogram sampling.
+ * Reused across frames so the multi-person path doesn't allocate a fresh
+ * full-resolution canvas (and its backing memory) on every animation frame,
+ * which was a steady source of per-frame churn during scoring.
+ */
+let histCanvas: HTMLCanvasElement | null = null;
+let histCtx: CanvasRenderingContext2D | null = null;
+
+/**
+ * Sample a torso color histogram for each detection by reading the torso region
+ * (shoulders→hips bbox) from the source via a scratch 2D canvas. Gracefully
+ * no-ops — returning all-undefined — when no 2D canvas/pixels are available
+ * (Node/test), in which case appearance stays undefined and the tracker falls
+ * back to motion-only matching. Never throws.
+ */
+function sampleTorsoHistograms(
+  source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement,
+  poses: Pose[],
+): Array<number[] | undefined> {
+  const none: Array<number[] | undefined> = poses.map(() => undefined);
+  // No DOM / no canvas factory (Node, SSR) → bail.
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    return none;
+  }
+  const size = sourceSize(source);
+  if (!size) return none;
+  let ctx: CanvasRenderingContext2D | null;
+  try {
+    // Reuse a single scratch canvas across frames; only resize it when the
+    // source dimensions change. Behavior is identical to a fresh canvas.
+    if (!histCanvas) {
+      histCanvas = document.createElement("canvas");
+      histCtx = histCanvas.getContext("2d", { willReadFrequently: true });
+    }
+    if (histCanvas.width !== size.w) histCanvas.width = size.w;
+    if (histCanvas.height !== size.h) histCanvas.height = size.h;
+    ctx = histCtx;
+    if (!ctx) return none;
+    ctx.drawImage(source as CanvasImageSource, 0, 0, size.w, size.h);
+  } catch {
+    return none; // tainted canvas / unsupported source → motion-only
+  }
+
+  const LS = KEYPOINT_INDEX.left_shoulder;
+  const RS = KEYPOINT_INDEX.right_shoulder;
+  const LH = KEYPOINT_INDEX.left_hip;
+  const RH = KEYPOINT_INDEX.right_hip;
+
+  return poses.map((pose) => {
+    // Prefer a tight torso box (shoulders→hips); fall back to the pose bbox.
+    const k = pose.keypoints;
+    const torso = [k[LS], k[RS], k[LH], k[RH]].filter((p) => p && (p.score ?? 0) >= 0.3);
+    let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+    if (torso.length >= 3) {
+      const xs = torso.map((p) => p.x);
+      const ys = torso.map((p) => p.y);
+      box = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+    } else {
+      box = poseBBox(pose);
+    }
+    if (!box) return undefined;
+    const x0 = Math.max(0, Math.floor(box.minX));
+    const y0 = Math.max(0, Math.floor(box.minY));
+    const x1 = Math.min(size.w, Math.ceil(box.maxX));
+    const y1 = Math.min(size.h, Math.ceil(box.maxY));
+    const bw = x1 - x0;
+    const bh = y1 - y0;
+    if (bw <= 1 || bh <= 1) return undefined;
+    try {
+      const img = ctx!.getImageData(x0, y0, bw, bh).data; // RGBA
+      // Flatten to RGB, skipping fully-transparent pixels.
+      const rgb: number[] = [];
+      for (let i = 0; i + 3 < img.length; i += 4) {
+        if (img[i + 3] < 8) continue;
+        rgb.push(img[i], img[i + 1], img[i + 2]);
+      }
+      if (rgb.length < 3) return undefined;
+      const hist = buildHistogram(rgb);
+      return hist.some((v) => v > 0) ? hist : undefined;
+    } catch {
+      return undefined;
+    }
+  });
 }
 
 /** Map a raw detector pose into our COCO-17 `Pose` (2D, plus 3D when present). */
@@ -123,10 +216,11 @@ export class PoseDetector {
     if (this.backendReady) return;
     await tf.setBackend("webgl");
     await tf.ready();
-    // Release WebGL textures as soon as they're freed instead of pooling them.
-    // The per-frame detection allocates and discards textures constantly; left
-    // pooled, that pool grows and shows up as monotonic memory growth across a
-    // clip. A threshold of 0 keeps GPU memory flat (TF.js memory guidance).
+    // Release WebGL textures as soon as they're freed rather than pooling them.
+    // Per-frame detection constantly allocates and discards textures; left
+    // pooled, that pool grows and surfaces as the monotonic memory growth seen
+    // across a clip (issue #14). A threshold of 0 keeps GPU memory flat without
+    // changing detection results (TF.js memory guidance).
     tf.env().set("WEBGL_DELETE_TEXTURE_THRESHOLD", 0);
     this.backendReady = true;
   }
@@ -142,7 +236,9 @@ export class PoseDetector {
     scaleX: number;
     scaleY: number;
   } {
-    const { w, h } = sourceSize(source);
+    const size = sourceSize(source);
+    if (!size) return { input: source, scaleX: 1, scaleY: 1 };
+    const { w, h } = size;
     const longest = Math.max(w, h);
     if (w <= 0 || h <= 0 || longest <= DETECT_INPUT_MAX) {
       return { input: source, scaleX: 1, scaleY: 1 };
@@ -295,11 +391,18 @@ export class PoseDetector {
     maxPoses = 6,
   ): Promise<Pose[]> {
     await this.loadMulti();
-    const poses = await this.multiDetector!.estimatePoses(source, {
+    const raw = await this.multiDetector!.estimatePoses(source, {
       maxPoses,
       flipHorizontal: false,
     });
-    return poses.map(toPose);
+    const poses = raw.map(toPose);
+    // Attach a torso color histogram per detection (DeepSORT-lite appearance
+    // cue) when a 2D canvas is available; a graceful no-op headless.
+    const hists = sampleTorsoHistograms(source, poses);
+    for (let i = 0; i < poses.length; i++) {
+      if (hists[i]) poses[i].appearance = hists[i];
+    }
+    return poses;
   }
 
   dispose(): void {

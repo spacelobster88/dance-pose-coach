@@ -281,6 +281,86 @@ button:disabled {
   cursor: crosshair;
 }
 
+/* Selfie mirror: the live webcam feed reads more naturally flipped, so the
+   user's left hand is on the screen's left. The overlay canvas is mirrored in
+   lockstep so the drawn skeletons stay registered to the video; tap mapping
+   undoes the flip (see mapDisplayToSource). */
+.video-wrap.mirrored video,
+.video-wrap.mirrored canvas {
+  transform: scaleX(-1);
+}
+
+/* Live multi-person lock overlay: a status badge + Re-lock button, floating
+   over the bottom of the test feed. The whole wrap accepts taps in live-multi
+   mode so any point on the feed can re-lock onto the tapped dancer. */
+.video-wrap.live-multi {
+  cursor: crosshair;
+}
+
+.lock-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  /* Sit above the (mirrored) video + canvas; not affected by the flip. */
+  z-index: 2;
+  pointer-events: none;
+}
+
+.lock-overlay[hidden] {
+  display: none;
+}
+
+.lock-badge {
+  pointer-events: none;
+  background: rgba(12, 12, 14, 0.72);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 5px 11px;
+  border-radius: 999px;
+  backdrop-filter: blur(4px);
+}
+
+/* Tint the badge by lock state so "Locked" reads positive at a glance. */
+.lock-badge.tracking {
+  background: var(--accent);
+}
+
+.lock-badge.coasting {
+  /* Holding the spot: amber, between locked-green and searching-orange. */
+  background: rgba(176, 120, 20, 0.85);
+}
+
+.lock-badge.searching,
+.lock-badge.lost {
+  background: rgba(181, 71, 8, 0.85);
+}
+
+.lock-relock {
+  pointer-events: auto;
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(12, 12, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+
+.lock-relock:hover {
+  background: rgba(12, 12, 14, 0.9);
+}
+
 /* ---- Scoreboard ---- */
 .scoreboard {
   background: var(--surface);
@@ -674,4 +754,18 @@ footer a {
   color: var(--ink-soft);
   text-decoration: none;
   border-bottom: 1px solid var(--line-strong);
+}
+
+/* Visually-hidden label helper (a11y): present for screen readers, off-screen
+   visually. Used by the AI coaching provider selector (#15). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

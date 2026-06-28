@@ -96,6 +96,42 @@ constant full-res GPU texture uploads → memory growth.
       downscale + texture hygiene above, so the worker is left as a follow-up.
       Verified: `npm run verify` ALL CHECKS PASSED (Chrome took the rVFC path).
 
+## v0.5 — AI coaching insights (#15)
+- [x] **Model-agnostic insights layer** — `src/insights/`:
+      - [x] `types.ts` — `CoachingInput` (segments + per-limb degrees + signed
+            direction + score series + top-N opportunities) + `CoachingProvider`
+            (`generateCoaching(report)`) pluggable interface.
+      - [x] `report.ts` — `RunReport` aggregator that compiles the structured
+            report from the existing per-frame score + per-limb divergence:
+            angular error in **degrees** (bone vectors) and a **signed**
+            correction direction (mean keypoint offset), segmented over time with
+            top-3 opportunities. (This is #9's "rule-based report", which did not
+            actually exist in-tree yet — built here.)
+      - [x] `prompt.ts` — dance-coach system prompt + compact report serializer.
+      - [x] `ruleBased.ts` — deterministic offline coaching (the fallback) +
+            provider wrapper.
+      - [x] `ollama.ts` — local Ollama provider (`/api/chat`, NDJSON streaming),
+            recommended default; availability-probes `/api/tags`.
+      - [x] `claude.ts` — **opt-in** remote provider via a user-configured thin
+            proxy (key stays server-side); default model `claude-opus-4-8`;
+            SSE/JSON/text responses.
+      - [x] `markdown.ts` — tiny zero-dependency Markdown → HTML (escapes first).
+      - [x] `storage.ts` — safe localStorage accessor (no-op off-browser).
+      - [x] `index.ts` — provider registry + `generateCoaching()` dispatcher with
+            **Auto** (local-if-available) and **clean fallback** to rule-based on
+            unavailability/error.
+- [x] **UI** — `index.html` "✨ AI coaching" panel (provider select + contextual
+      Ollama-model / Claude-proxy-URL inputs, persisted in localStorage) +
+      coaching panel; `src/ui/app.ts` feeds the `RunReport` each scored frame,
+      streams tokens into the panel, renders Markdown, and surfaces the provider
+      / fallback note. Privacy-preserving: only derived stats leave the page, and
+      only on the opt-in remote path.
+- [x] **Tests** — `npm test` (`test/insights.test.ts`, runs real TS via a tiny
+      `--import` resolver hook): report aggregation, rule-based output, Markdown,
+      and dispatcher fallback (23 assertions). `demo/verify.mjs` scenario A also
+      asserts the offline coaching panel renders Markdown end-to-end in Chrome.
+- [x] `npm run typecheck` + `npm run build` green.
+
 ## Backlog — next loop
 - [ ] Trim/scrub the exported clip range before saving (currently whole routine)
 - [ ] Score history: mark the worst moments / scrub to them

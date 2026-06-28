@@ -3,6 +3,7 @@ import {
   type Pose,
 } from "../pose/keypoints";
 import { DEFAULT_MIN_KEYPOINT_SCORE } from "../pose/normalize";
+import type { TrackedPose } from "../pose/tracker";
 
 export interface DrawOptions {
   minScore?: number;
@@ -178,4 +179,93 @@ export function drawSkeletons(
     }
     ctx.restore();
   }
+}
+
+/**
+ * Multi-person overlay keyed on tracked ids: every candidate the detector found
+ * is drawn faded except the locked dancer, who is drawn at full strength (with
+ * any highlight edges). A thin convenience over `drawSkeletons` for the
+ * live-webcam pick/hold path, so app.ts can pass the raw tracked array + the
+ * locked id directly. `held`, when given, is the coasted pose to draw for the
+ * locked dancer if it wasn't detected this frame (so a brief dropout doesn't
+ * blink the lock out).
+ */
+export function drawMultiTarget(
+  ctx: CanvasRenderingContext2D | HTMLCanvasElement,
+  candidates: TrackedPose[],
+  lockedId: number | null,
+  opts: DrawOptions & {
+    /** Highlight edges to apply to the locked dancer only. */
+    highlightEdges?: Array<[number, number]>;
+    /** A held/coasted pose for the locked dancer, drawn if it's not detected. */
+    held?: Pose | null;
+  } = {},
+): void {
+  const canvas =
+    ctx instanceof HTMLCanvasElement ? ctx : (ctx.canvas as HTMLCanvasElement);
+  const { highlightEdges, held, ...drawOpts } = opts;
+  const layers: SkeletonLayer[] = candidates.map((t) => ({
+    pose: t.pose,
+    dim: t.id !== lockedId,
+    highlightEdges: t.id === lockedId ? highlightEdges : undefined,
+  }));
+  // The locked dancer is coasting (not among this frame's detections): draw the
+  // held pose so the lock stays visible.
+  if (held && lockedId !== null && !candidates.some((t) => t.id === lockedId)) {
+    layers.push({ pose: held, dim: false, highlightEdges });
+  }
+  if (layers.length) drawSkeletons(canvas, layers, drawOpts);
+  else clearCanvas(canvas);
+}
+
+/** A display rectangle (subset of DOMRect) for coordinate mapping. */
+export interface DisplayRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Map a pointer position in viewport/CSS pixels into source-video pixel space,
+ * undoing both the `object-fit: contain` letterbox and an optional horizontal
+ * (selfie) mirror.
+ *
+ * The video is rendered centered inside `rect` at the largest size that fits
+ * while preserving its `videoW × videoH` aspect ratio, leaving letterbox bars on
+ * the two narrow sides. A click in those bars isn't over any pixel of the video,
+ * so this returns `null` (the caller should ignore it). When `mirrored` is true
+ * the feed is flipped about its vertical center (CSS `transform: scaleX(-1)`),
+ * so the recovered source X is mirrored back: `x → videoW - x`.
+ *
+ * Pure and DOM-free so it's unit-testable headless.
+ */
+export function mapDisplayToSource(
+  clientX: number,
+  clientY: number,
+  rect: DisplayRect,
+  videoW: number,
+  videoH: number,
+  mirrored: boolean,
+): { x: number; y: number } | null {
+  if (!rect.width || !rect.height || !videoW || !videoH) return null;
+  // Largest scale that fits the video inside the box (object-fit: contain).
+  const scale = Math.min(rect.width / videoW, rect.height / videoH);
+  const drawnW = videoW * scale;
+  const drawnH = videoH * scale;
+  // Letterbox offsets that center the drawn video inside the box.
+  const offX = (rect.width - drawnW) / 2;
+  const offY = (rect.height - drawnH) / 2;
+  // Position within the box, in box pixels.
+  const bx = clientX - rect.left;
+  const by = clientY - rect.top;
+  // Reject clicks in the letterbox margin (not over the video content).
+  if (bx < offX || bx > offX + drawnW || by < offY || by > offY + drawnH) {
+    return null;
+  }
+  // Back into source-video pixels.
+  let sx = (bx - offX) / scale;
+  const sy = (by - offY) / scale;
+  if (mirrored) sx = videoW - sx;
+  return { x: sx, y: sy };
 }

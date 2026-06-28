@@ -109,6 +109,94 @@
         color: var(--ink-faint);
         font-size: 0.78rem;
       }
+
+      /* AI coaching panel (#15) — turns the run's report into LLM/rule-based
+         natural-language coaching. Reuses the theme tokens from style.css. */
+      .coaching {
+        margin-top: 28px;
+      }
+      .coaching-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .coaching-head h3 {
+        margin: 0;
+        margin-right: auto;
+      }
+      .coaching-config {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .coaching-config label {
+        color: var(--ink-faint);
+        font-size: 0.78rem;
+        font-weight: 600;
+      }
+      .coaching-config input[type="text"] {
+        flex: 1 1 220px;
+        min-width: 160px;
+        padding: 6px 10px;
+        border: 1px solid var(--line, #e2e2e2);
+        border-radius: 6px;
+        font: inherit;
+        font-size: 0.85rem;
+      }
+      .coaching-config[hidden] {
+        display: none;
+      }
+      .coaching-panel {
+        margin-top: 14px;
+        padding: 16px 18px;
+        border: 1px solid var(--line, #e2e2e2);
+        border-radius: 10px;
+        background: var(--surface);
+        min-height: 48px;
+        line-height: 1.5;
+        color: var(--ink-soft);
+      }
+      .coaching-panel.empty {
+        color: var(--ink-faint);
+        font-size: 0.9rem;
+      }
+      .coaching-panel h1,
+      .coaching-panel h2,
+      .coaching-panel h3 {
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--ink-faint);
+        margin: 14px 0 6px;
+      }
+      .coaching-panel p {
+        margin: 0 0 10px;
+      }
+      .coaching-panel ul,
+      .coaching-panel ol {
+        margin: 0 0 10px;
+        padding-left: 22px;
+      }
+      .coaching-panel li {
+        margin: 4px 0;
+      }
+      .coaching-panel code {
+        background: var(--line, #f0f0f0);
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 0.85em;
+      }
+      .coaching-source {
+        margin-top: 8px;
+        color: var(--ink-faint);
+        font-size: 0.76rem;
+      }
+      .coaching-source.warn {
+        color: #b54708;
+      }
     </style>
   </head>
   <body>
@@ -174,9 +262,24 @@
         </div>
         <div class="pane test">
           <h2 id="test-heading">Your attempt</h2>
-          <div class="video-wrap">
+          <div class="video-wrap" id="test-wrap">
             <video id="test-video" playsinline muted preload="auto"></video>
             <canvas id="test-canvas"></canvas>
+            <!-- Live multi-person lock UI: a status badge + a Re-lock button.
+                 Shown only in live-webcam multi mode; tap the feed to re-lock. -->
+            <div id="lock-overlay" class="lock-overlay" hidden>
+              <span id="lock-badge" class="lock-badge" aria-live="polite"
+                >Looking for a dancer…</span
+              >
+              <button
+                id="relock-btn"
+                class="lock-relock"
+                type="button"
+                title="Re-lock onto the most central dancer"
+              >
+                Re-lock
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -251,6 +354,36 @@
           <span class="bd-hint">higher = further from the reference</span>
         </h3>
         <div id="breakdown-rows"></div>
+      </section>
+
+      <section class="coaching">
+        <div class="coaching-head">
+          <h3>✨ AI coaching</h3>
+          <label for="coach-provider" class="visually-hidden">Coaching provider</label>
+          <select id="coach-provider" class="secondary" title="Where coaching is generated. Local Ollama and the offline report keep everything on-device; Claude is opt-in and sends derived stats (never video) to your proxy.">
+            <option value="auto">Auto · local if available</option>
+            <option value="ollama">Local · Ollama</option>
+            <option value="claude">Remote · Claude (opt-in)</option>
+            <option value="rule-based">Offline · rule-based</option>
+          </select>
+          <button id="coach-btn" class="secondary" title="Turn this run's pose report into prioritized, natural-language coaching">
+            ✨ Coach me
+          </button>
+        </div>
+        <div id="coach-config-ollama" class="coaching-config" hidden>
+          <label for="coach-ollama-model">Ollama model</label>
+          <input id="coach-ollama-model" type="text" placeholder="llama3.1" />
+        </div>
+        <div id="coach-config-claude" class="coaching-config" hidden>
+          <label for="coach-claude-url">Claude proxy URL</label>
+          <input id="coach-claude-url" type="text" placeholder="https://your-proxy.example/coach" />
+        </div>
+        <div id="coach-panel" class="coaching-panel empty">
+          Play a routine, then press <strong>Coach me</strong> for prioritized,
+          plain-language feedback. Everything is derived from pose stats — your
+          video never leaves this page.
+        </div>
+        <p id="coach-source" class="coaching-source" hidden></p>
       </section>
 
       <section class="report" id="report" hidden>
