@@ -16,6 +16,7 @@ import { ruleBasedProvider, ruleBasedCoaching } from "./ruleBased";
 import { ollamaProvider } from "./ollama";
 import { openaiProvider } from "./openai";
 import { claudeProvider } from "./claude";
+import { mismatchMessage } from "./mismatch";
 
 export type { CoachingInput, CoachingProvider, TokenSink } from "./types";
 export { RunReport, frameLimbMetrics } from "./report";
@@ -76,6 +77,21 @@ export async function generateCoaching(
   report: CoachingInput,
   opts: GenerateOptions = {},
 ): Promise<CoachingResult> {
+  // Mismatch gate: if the two clips look like different dances, the score is not
+  // a meaningful basis for coaching — return the bilingual explainer instead of
+  // per-limb tips, and never hit a provider/model. Runs before provider choice
+  // so it applies to every provider, including an explicitly-chosen one.
+  if (report.mismatch?.likelyDifferent) {
+    const text = mismatchMessage(report);
+    opts.onToken?.(text);
+    return {
+      text,
+      providerId: "mismatch",
+      fellBack: false,
+      note: "Detected two different dances — coaching suppressed.",
+    };
+  }
+
   const choice = opts.provider ?? "auto";
 
   let provider: CoachingProvider;

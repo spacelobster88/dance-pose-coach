@@ -72,6 +72,8 @@ interface Dom {
   scoreNow: HTMLElement;
   scoreAvg: HTMLElement;
   scoreFill: HTMLElement;
+  scoreboard: HTMLElement;
+  scoreMismatch: HTMLElement;
   scoreHistory: HTMLCanvasElement;
   livesyncCluster: HTMLElement;
   lagStat: HTMLElement;
@@ -127,6 +129,8 @@ export function initApp(): void {
     scoreNow: byId("score-now"),
     scoreAvg: byId("score-avg"),
     scoreFill: byId("score-fill"),
+    scoreboard: byId("scoreboard"),
+    scoreMismatch: byId("score-mismatch"),
     scoreHistory: byId("score-history"),
     livesyncCluster: byId("livesync-cluster"),
     lagStat: byId("lag-stat"),
@@ -199,6 +203,7 @@ export function initApp(): void {
     reportPanel.clear();
     lastScored = null;
     setScoreUi(null, null);
+    setScoreMismatch(false);
     setLagUi(null);
   };
 
@@ -267,6 +272,17 @@ export function initApp(): void {
     // Hue from red (0) to green (120) for an at-a-glance read.
     const hue = (pct / 100) * 120;
     dom.scoreFill.style.background = `hsl(${hue}, 80%, 45%)`;
+  };
+
+  // Toggle the "score isn't meaningful" treatment when the two clips look like
+  // different dances (bilingual). Mutes the numbers and shows a short note.
+  const setScoreMismatch = (mismatch: boolean) => {
+    dom.scoreboard.classList.toggle("score-muted", mismatch);
+    dom.scoreMismatch.hidden = !mismatch;
+    if (mismatch) {
+      dom.scoreMismatch.textContent =
+        "⚠️ Different dances — score not meaningful · 不同的舞蹈，分数仅供参考";
+    }
   };
 
   // Lag readout is only meaningful with live sync engaged on the webcam.
@@ -1138,6 +1154,10 @@ export function initApp(): void {
     dom.coachPanel.textContent = "Analysing your run…";
 
     const input = report.build();
+    // If the clips look like different dances, the score isn't meaningful — mute
+    // the readout and label it, so the number doesn't mislead. The coaching panel
+    // itself shows the full bilingual explainer (returned by generateCoaching).
+    setScoreMismatch(input.mismatch.likelyDifferent);
     let streamed = "";
     try {
       const res = await generateCoaching(input, {

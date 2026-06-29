@@ -7,7 +7,7 @@
 //
 // Exits non-zero on any failed assertion.
 
-import { RunReport, frameLimbMetrics } from "../src/insights/report.ts";
+import { RunReport, frameLimbMetrics, assessMismatch } from "../src/insights/report.ts";
 import { ruleBasedCoaching } from "../src/insights/ruleBased.ts";
 import { renderMarkdown } from "../src/insights/markdown.ts";
 import { generateCoaching } from "../src/insights/index.ts";
@@ -150,6 +150,72 @@ const openai = await generateCoaching(input, { provider: "openai" });
 check(openai.providerId === "rule-based", "unconfigured OpenAI ⇒ fallback");
 check(openai.fellBack === true, "OpenAI fallback flag set");
 check(/OpenAI/.test(openai.note ?? ""), "OpenAI fallback explains why", openai.note);
+
+// --- Mismatch detection (different dances) ------------------------------------
+// Build a report from an explicit list of per-frame scores (limbs don't matter
+// for the score distribution, so reuse the ref/test pair).
+function reportFromScores(scores: number[]) {
+  const r = new RunReport();
+  scores.forEach((s, i) => r.push(i * 100, s, frameLimbMetrics(ref, test)));
+  return r.build();
+}
+
+// assessMismatch: both peak and mean must be low to flag.
+check(
+  assessMismatch({ avgScore: 50, peakScore: 55, scoreStd: 4, frames: 30 }).likelyDifferent,
+  "assessMismatch flags low-peak low-mean run",
+);
+check(
+  !assessMismatch({ avgScore: 50, peakScore: 88, scoreStd: 18, frames: 30 }).likelyDifferent,
+  "assessMismatch spares a low mean when peak is high (imperfect attempt)",
+);
+check(
+  !assessMismatch({ avgScore: 50, peakScore: 55, scoreStd: 4, frames: 6 }).likelyDifferent,
+  "assessMismatch never flags too-few-frame runs",
+);
+check(
+  assessMismatch({ avgScore: 40, peakScore: 45, scoreStd: 3, frames: 30 }).confidence > 0,
+  "assessMismatch reports non-zero confidence when flagged",
+);
+
+// Different dances: nothing ever lines up — flat, low, never peaks.
+const diff = reportFromScores(Array.from({ length: 30 }, (_, i) => 48 + (i % 5)));
+check(diff.mismatch.likelyDifferent, "different-dances report is flagged", `peak ${diff.peakScore}`);
+check(diff.peakScore < 62, "different-dances peak stays below floor", `${diff.peakScore}`);
+
+// Imperfect attempt of the SAME routine: mediocre mean but real peaks.
+const imperfect = reportFromScores(
+  Array.from({ length: 30 }, (_, i) => (i % 4 === 0 ? 85 : 45)),
+);
+check(!imperfect.mismatch.likelyDifferent, "imperfect-attempt report is NOT flagged", `peak ${imperfect.peakScore}`);
+
+// Perfect run is never flagged.
+const perfect = reportFromScores(Array.from({ length: 30 }, () => 96));
+check(!perfect.mismatch.likelyDifferent, "perfect run is NOT flagged");
+
+// The original 30-frame `input` (peaks at 85) must NOT be flagged — otherwise the
+// coaching tests above would have been short-circuited.
+check(!input.mismatch.likelyDifferent, "normal scored run is NOT flagged");
+
+// --- Coaching gate on mismatch ------------------------------------------------
+// A different-dances report short-circuits generateCoaching: bilingual mismatch
+// message, providerId "mismatch", no per-limb coaching, no provider call.
+const gated = await generateCoaching(diff, { provider: "auto" });
+check(gated.providerId === "mismatch", "mismatch report ⇒ providerId 'mismatch'", gated.providerId);
+check(gated.fellBack === false, "mismatch gate is not a fallback");
+check(/different dance/i.test(gated.text), "mismatch message mentions different dances (EN)");
+check(/不同的舞蹈/.test(gated.text), "mismatch message is bilingual (中文)");
+check(
+  !/### Top/.test(gated.text) && !/### Practice/.test(gated.text) && !/### 练习方法/.test(gated.text),
+  "mismatch message contains no per-limb coaching sections",
+);
+// Even when a remote provider is explicitly chosen, the gate wins (and no key/network needed).
+const gatedRemote = await generateCoaching(diff, { provider: "openai" });
+check(gatedRemote.providerId === "mismatch", "mismatch gate beats an explicit provider choice");
+
+// A normal report is NOT gated — it still falls back to rule-based coaching.
+const ungated = await generateCoaching(imperfect, { provider: "auto" });
+check(ungated.providerId !== "mismatch", "imperfect attempt is coached, not gated", ungated.providerId);
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -377,6 +377,25 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+/* Two clips look like different dances: the score isn't meaningful, so mute the
+   numbers/bar and show a short bilingual note. */
+.scoreboard.score-muted .score-numbers,
+.scoreboard.score-muted .score-bar {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+
+.score-mismatch {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid #d9a300;
+  border-radius: var(--radius);
+  background: rgba(217, 163, 0, 0.1);
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 .score-numbers .label {
   color: var(--ink-faint);
   font-size: 0.7rem;

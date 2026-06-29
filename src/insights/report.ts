@@ -14,6 +14,7 @@ import type { NormalizedPose } from "../pose/normalize";
 import type {
   CoachingInput,
   LimbCorrection,
+  MismatchAssessment,
   ReportSegment,
   ScorePoint,
 } from "./types";
@@ -165,6 +166,65 @@ function phraseFor(dx: number, dy: number): string {
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+// --- Mismatch detection -----------------------------------------------------
+//
+// Distinguishes "same routine, performed imperfectly" from "two completely
+// different dances". A plain low average is unreliable: two arbitrary upright
+// dancers share rough limb orientation, so unrelated clips still float ~50-55
+// (which is exactly why far-to-close vs swan-lake scored 54.5 and got coached).
+//
+// The discriminator is the PEAK. An imperfect attempt of the same routine hits
+// well-aligned instants (high peak) even when the mean is mediocre; two
+// different dances never line up, so even their best moment stays low. We flag
+// only when BOTH the peak and the mean are low — biased against false positives,
+// since wrongly suppressing real coaching is worse than an odd stray tip.
+
+/** If even the best frame is below this, nothing ever aligned. */
+const PEAK_FLOOR = 62;
+/** Overall similarity below this is low. */
+const MEAN_FLOOR = 58;
+/** Below this many frames there's too little data to judge — never flag. */
+const MIN_FRAMES = 12;
+
+/**
+ * Decide whether two clips are likely different dances from the run's score
+ * distribution. Pure and deterministic. Constants assume default strictness
+ * (k=6); see `.harness/specs/detection.md` for the calibration note.
+ */
+export function assessMismatch(input: {
+  avgScore: number;
+  peakScore: number;
+  scoreStd: number;
+  frames: number;
+}): MismatchAssessment {
+  const { avgScore, peakScore, frames } = input;
+  const reasons: string[] = [];
+
+  if (frames < MIN_FRAMES) {
+    return {
+      likelyDifferent: false,
+      confidence: 0,
+      reasons: [`too few frames (${frames}) to judge`],
+    };
+  }
+
+  const peakLow = peakScore < PEAK_FLOOR;
+  const meanLow = avgScore < MEAN_FLOOR;
+  if (peakLow) reasons.push(`peak ${round1(peakScore)} < floor ${PEAK_FLOOR}`);
+  if (meanLow) reasons.push(`mean ${round1(avgScore)} < floor ${MEAN_FLOOR}`);
+
+  const likelyDifferent = peakLow && meanLow;
+  const peakGap = clamp01((PEAK_FLOOR - peakScore) / PEAK_FLOOR);
+  const meanGap = clamp01((MEAN_FLOOR - avgScore) / MEAN_FLOOR);
+  const confidence = likelyDifferent
+    ? clamp01(0.5 * peakGap + 0.5 * meanGap + 0.1)
+    : 0;
+
+  return { likelyDifferent, confidence, reasons };
+}
+
 /**
  * Accumulates scored frames over a run and builds the compact CoachingInput.
  *
@@ -200,6 +260,9 @@ export class RunReport {
         durationSec: 0,
         frames: 0,
         avgScore: 0,
+        peakScore: 0,
+        scoreStd: 0,
+        mismatch: assessMismatch({ avgScore: 0, peakScore: 0, scoreStd: 0, frames: 0 }),
         lowest: null,
         segments: [],
         opportunities: [],
@@ -213,16 +276,23 @@ export class RunReport {
 
     // Overall stats + per-limb accumulator.
     let scoreSum = 0;
+    let scoreSqSum = 0;
+    let peak = frames[0].score;
     let lowest = { score: frames[0].score, t: 0 };
     const overall: Record<string, LimbAcc> = {};
     for (const g of LIMB_GROUPS) overall[g.key] = newLimbAcc();
     for (const f of frames) {
       scoreSum += f.score;
+      scoreSqSum += f.score * f.score;
+      if (f.score > peak) peak = f.score;
       if (f.score < lowest.score) {
         lowest = { score: f.score, t: round1((f.tMs - t0) / 1000) };
       }
       for (const g of LIMB_GROUPS) accumulate(overall[g.key], f.limbs[g.key]);
     }
+    const avgScore = scoreSum / n;
+    // Population standard deviation; guard tiny negatives from float error.
+    const scoreStd = Math.sqrt(Math.max(0, scoreSqSum / n - avgScore * avgScore));
 
     // Segment the timeline into equal time buckets (skip empty ones).
     const buckets = Math.max(1, Math.min(segmentCount, n));
@@ -292,10 +362,14 @@ export class RunReport {
       });
     }
 
+    const peakScore = round1(peak);
     return {
       durationSec: round1(durationMs / 1000),
       frames: n,
-      avgScore: round1(scoreSum / n),
+      avgScore: round1(avgScore),
+      peakScore,
+      scoreStd: round1(scoreStd),
+      mismatch: assessMismatch({ avgScore, peakScore: peak, scoreStd, frames: n }),
       lowest: { score: round1(lowest.score), t: lowest.t },
       segments,
       opportunities,

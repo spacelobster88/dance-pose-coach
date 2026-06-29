@@ -37,6 +37,21 @@ export interface LimbCorrection {
   direction: string;
 }
 
+/**
+ * Verdict on whether the two clips are the same choreography at all. When
+ * `likelyDifferent` is true the similarity score is not a meaningful measure of
+ * performance (e.g. comparing two unrelated dances), so per-limb coaching is
+ * suppressed in favor of a clear "these are different dances" message.
+ */
+export interface MismatchAssessment {
+  /** Gate: true ⇒ the clips look like different dances; suppress coaching. */
+  likelyDifferent: boolean;
+  /** Strength of evidence, clamped to [0, 1]. */
+  confidence: number;
+  /** Human-readable evidence keys, e.g. "peak 41 < floor 62". */
+  reasons: string[];
+}
+
 /** One contiguous time slice of the routine, summarized. */
 export interface ReportSegment {
   index: number;
@@ -56,6 +71,12 @@ export interface CoachingInput {
   frames: number;
   /** Mean similarity over the whole run, [0, 100]. */
   avgScore: number;
+  /** Best (highest) single-frame similarity over the run, [0, 100]. */
+  peakScore: number;
+  /** Population standard deviation of per-frame scores. */
+  scoreStd: number;
+  /** Whether the two clips look like different dances entirely. */
+  mismatch: MismatchAssessment;
   /** Lowest scored instant and when it happened. */
   lowest: { score: number; t: number } | null;
   /** Time-ordered segment summaries. */

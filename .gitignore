@@ -39,3 +39,6 @@ demo/*.jpg
 
 # Harness loop state
 .harness/
+
+# Archived harness projects (transient)
+.harness-archive/
